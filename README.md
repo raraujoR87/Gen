@@ -41,4 +41,9 @@ pytest
 uvicorn backend.api.main:app --reload   # requer Postgres/Redis locais, ver .env.example
 ```
 
-Veja `DEPLOY.md` para deploy no Modal.com.
+## Deploy
+
+Deploy do backend no Modal.com (secrets, migrações Alembic, `modal deploy`),
+build/assinatura do app Android e o checklist de segurança obrigatório antes
+de `TRADING_MODE=live` (incluindo plano de rollback e kill switch) estão em
+[`DEPLOY.md`](DEPLOY.md).
