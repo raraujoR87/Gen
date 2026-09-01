@@ -119,6 +119,21 @@ as administrator once and `Set-ExecutionPolicy -Scope CurrentUser
 RemoteSigned`, or use `.venv\Scripts\activate.bat` from `cmd.exe`
 instead.)
 
+**Windows shortcut:** once Redis/Memurai is running (step 1) and `.env`
+is configured (step 2), `run_local.bat` does steps 3 and 4 for you —
+double-click it, or run it from `cmd.exe`/PowerShell:
+
+```
+run_local.bat
+```
+
+It creates `.venv` if missing, installs dependencies, runs
+`scripts\init_db.py`, and starts `uvicorn` — safe to re-run any time
+(re-running `init_db.py` on an existing SQLite file is a no-op for
+tables that already exist). It also copies `.env.example` to `.env` for
+you on a first run if you haven't already, though you should still edit
+`MONITORED_PAIRS` before trusting the output.
+
 `scripts/init_db.py` creates the `users` / `exchange_accounts` /
 `arbitrage_executions` tables straight from the SQLAlchemy models
 (`Base.metadata.create_all`) into the SQLite file named by `DATABASE_URL`.
