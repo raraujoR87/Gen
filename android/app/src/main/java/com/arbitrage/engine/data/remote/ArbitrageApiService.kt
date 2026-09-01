@@ -39,4 +39,14 @@ interface ArbitrageApiService {
     suspend fun getExecutionHistory(
         @Path("userId") userId: String
     ): List<TradeSignalResponseDto>
+
+    /**
+     * Engages/disengages the user's remote kill switch (RiskLimits.kill_switch_engaged),
+     * halting or resuming trade execution server-side.
+     */
+    @POST("users/{userId}/kill-switch")
+    suspend fun setKillSwitch(
+        @Path("userId") userId: String,
+        @Body engaged: Map<String, Boolean>
+    )
 }
