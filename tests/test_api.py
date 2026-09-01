@@ -88,7 +88,7 @@ def test_process_arbitrage_intent_approved(client, monkeypatch):
             adverse_hazard=0.05,
         )
 
-    def fake_should_execute(*, signal, request, limits):
+    def fake_should_execute(*, net_alpha_bps, signal, limits, trade_notional_usd=None, daily_notional_used_usd=0.0):
         return True, None
 
     async def fake_dispatch_orders(*, request, signal):
@@ -133,7 +133,7 @@ def test_process_arbitrage_intent_rejected(client, monkeypatch):
             adverse_hazard=0.5,
         )
 
-    def fake_should_execute(*, signal, request, limits):
+    def fake_should_execute(*, net_alpha_bps, signal, limits, trade_notional_usd=None, daily_notional_used_usd=0.0):
         return False, "execution_probability below threshold"
 
     import backend.execution.decision as decision_module
@@ -170,7 +170,7 @@ def test_rate_limit_exceeded(client, monkeypatch):
     async def fake_evaluate_spread(*, symbol, exchange_buy, exchange_sell):
         return ArbitrageSignal(execution_probability=0.4, expected_alpha_bps=5.0, adverse_hazard=0.5)
 
-    def fake_should_execute(*, signal, request, limits):
+    def fake_should_execute(*, net_alpha_bps, signal, limits, trade_notional_usd=None, daily_notional_used_usd=0.0):
         return False, "rejected"
 
     import backend.execution.decision as decision_module
