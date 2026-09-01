@@ -17,7 +17,7 @@ class TradeSignalRequest(BaseModel):
     exchange_buy: str
     exchange_sell: str
     capital_allocation_usd: float = Field(gt=0)
-    min_alpha_bps: float = 15.0
+    min_alpha_bps: float = Field(default=15.0, gt=0)
     trading_mode: TradingMode = TradingMode.TESTNET
 
 
