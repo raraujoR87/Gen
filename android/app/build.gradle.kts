@@ -62,13 +62,14 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
-    // Ktor client (SSE / WebSocket telemetry streaming)
+    // Ktor client (WebSocket bot-status telemetry). Portfolio SSE telemetry
+    // uses plain OkHttp instead (see TelemetryStreamClient) —
+    // io.ktor:ktor-client-sse is not a published artifact at any version.
     implementation("io.ktor:ktor-client-core:2.3.12")
     implementation("io.ktor:ktor-client-okhttp:2.3.12")
     implementation("io.ktor:ktor-client-content-negotiation:2.3.12")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
     implementation("io.ktor:ktor-client-websockets:2.3.12")
-    implementation("io.ktor:ktor-client-sse:2.3.12")
 
     // Security — Android KeyStore backed EncryptedSharedPreferences
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
