@@ -31,8 +31,9 @@ SQLite is simpler and the models already support it — see
 
 The order-book cache (`backend/marketdata/orderbook_cache.py`) is
 Redis-backed, so Redis itself still needs to be running — just not via
-Docker. Install it with your OS package manager and start it as a normal
-background process:
+Docker.
+
+**Linux/macOS:**
 
 ```bash
 # Debian/Ubuntu
@@ -45,6 +46,24 @@ brew services start redis
 ```
 
 Confirm it's up: `redis-cli ping` should print `PONG`.
+
+**Windows:** Redis itself isn't officially distributed for Windows. Without
+Docker, the two practical options are:
+
+- **Memurai** (recommended) — a Redis-protocol-compatible server built
+  natively for Windows. Install the free "Memurai for Developers" edition
+  from [memurai.com](https://www.memurai.com/get-memurai), which installs
+  and starts itself as a Windows service listening on `localhost:6379` —
+  nothing else to configure, and `REDIS_URL`'s default already points at
+  it.
+- **WSL2** — if you already use WSL2, install and run Redis inside it as
+  you would on Linux (`sudo apt-get install redis-server`); it's reachable
+  from Windows at `localhost:6379` the same way.
+
+Either way, confirm it's reachable before continuing — e.g. with
+`redis-cli ping` (from WSL2, or from PowerShell if you install the
+[Memurai CLI](https://www.memurai.com/) / any `redis-cli` build) — it
+should print `PONG`.
 
 ## 2. Configure environment
 
@@ -78,11 +97,27 @@ yourself and it will be used automatically if present
 
 ## 3. Install dependencies and create the database
 
+**Linux/macOS:**
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/init_db.py
 ```
+
+**Windows (PowerShell):**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python scripts\init_db.py
+```
+
+(If `Activate.ps1` is blocked by execution policy, either run PowerShell
+as administrator once and `Set-ExecutionPolicy -Scope CurrentUser
+RemoteSigned`, or use `.venv\Scripts\activate.bat` from `cmd.exe`
+instead.)
 
 `scripts/init_db.py` creates the `users` / `exchange_accounts` /
 `arbitrage_executions` tables straight from the SQLAlchemy models
