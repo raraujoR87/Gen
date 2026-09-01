@@ -71,13 +71,15 @@ jobs:
           REDIS_URL: ${{ env.REDIS_URL }}
           JWT_SECRET: ${{ env.JWT_SECRET }}
 
-  # Best-effort Android lint. android/ (unit-owned Kotlin/Jetpack Compose app)
-  # may not have a fully working Gradle wrapper/build configuration yet since
-  # it is developed in parallel with the backend units — this job is
-  # informational only (continue-on-error) and must never block the backend
-  # job or block merges. Once android/ has a working ./gradlew wrapper and
-  # build.gradle(.kts) setup, this can be promoted to a required check.
-  android-lint:
+  # Builds the real debug APK and runs the JVM unit tests. This is the first
+  # environment in the whole project with actual Android SDK access (the dev
+  # sandbox this app was built in has no SDK and its egress proxy blocks
+  # dl.google.com) — so this job is where the Kotlin code gets compiled for
+  # real for the first time. continue-on-error keeps a build failure here
+  # from blocking the backend job / merges while the Android side is still
+  # maturing; check this job's logs/artifact to see whether it actually
+  # succeeded rather than assuming green.
+  android-build:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -88,12 +90,30 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Run Android lint
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform + build-tools
+        run: |
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
+
+      - name: Assemble debug APK
         working-directory: android
         run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew lint
-          else
-            echo "No Gradle wrapper found in android/ yet — skipping lint (non-blocking)."
-          fi
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Run JVM unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Lint
+        working-directory: android
+        run: ./gradlew lint --stacktrace
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
