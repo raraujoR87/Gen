@@ -23,6 +23,16 @@ data class DashboardUiState(
     val errorMessage: String? = null
 )
 
+/**
+ * NOTE: [DashboardUiState.pnlDaily] / [DashboardUiState.winRate] stay at their
+ * zero defaults for now. [StreamTelemetryUseCase] streams live
+ * [com.arbitrage.engine.domain.model.PortfolioBalance] snapshots (free/locked
+ * per exchange+asset) — not an aggregated daily PnL/win-rate figure. Backing
+ * those fields for real needs a backend aggregation endpoint over
+ * `arbitrage_executions` (see backend/db/repository.py) that doesn't exist
+ * yet; this view model does not fabricate numbers for fields it can't
+ * actually source.
+ */
 class DashboardViewModel(
     private val streamTelemetryUseCase: StreamTelemetryUseCase,
     private val toggleKillSwitchUseCase: ToggleKillSwitchUseCase
@@ -37,12 +47,9 @@ class DashboardViewModel(
 
     private fun observeTelemetry() {
         streamTelemetryUseCase()
-            .onEach { snapshot ->
+            .onEach { balance ->
                 _uiState.value = _uiState.value.copy(
-                    pnlDaily = snapshot.pnlDailyUsd,
-                    winRate = snapshot.winRate,
-                    activeExchanges = snapshot.activeExchanges,
-                    isBotActive = snapshot.isBotActive,
+                    activeExchanges = (_uiState.value.activeExchanges + balance.exchange).distinct(),
                     isLoading = false,
                     errorMessage = null
                 )
