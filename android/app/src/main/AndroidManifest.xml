@@ -7,7 +7,15 @@
         android:allowBackup="false"
         android:label="Arbitrage Engine"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <!-- MainActivity / navigation host is added by the presentation-layer unit. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>
