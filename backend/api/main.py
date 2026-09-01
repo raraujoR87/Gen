@@ -13,17 +13,65 @@ which is expected outside of isolated unit tests. Tests provide local stubs
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 
 from fastapi import Depends, FastAPI
 
 from backend.api.contracts import TradeSignalRequest, TradeSignalResponse
 from backend.api.rate_limit import rate_limit_dependency
-from backend.schemas import RiskLimits
+from backend.schemas import DepthMatrix, RiskLimits, TemporalFeatures
 
 logger = logging.getLogger("backend.api.main")
 
 app = FastAPI(title="Bimodal Arbitrage API Gateway")
+
+_model = None  # lazily-constructed, process-wide BimodalArbitrageNet singleton
+
+
+def _get_model():
+    """Returns a cached BimodalArbitrageNet instance, constructing it once.
+
+    Untrained (randomly initialized) weights — see docs/ARCHITECTURE.md
+    section 9, Fase 1: this must be replaced with a checkpoint loaded via
+    backend.ml.train.load_checkpoint before TRADING_MODE=live.
+    """
+    global _model
+    if _model is None:
+        from backend.ml.model import BimodalArbitrageNet
+
+        _model = BimodalArbitrageNet()
+        _model.eval()
+    return _model
+
+
+def _synthetic_temporal_features() -> TemporalFeatures:
+    """Placeholder Stream 1 input, pending live backend.marketdata wiring.
+
+    See docs/ARCHITECTURE.md section 6: the reference Modal skeleton itself
+    used synthetic normalized tensors as an explicit interim mock at this
+    call site. backend.marketdata's WS ingestion is a long-running
+    worker/cache, not something this synchronous HTTP handler fetches
+    per-request — wiring it in (or an order-book cache read) is tracked in
+    DEPLOY.md as a pre-launch task.
+    """
+    return TemporalFeatures(
+        window=[
+            [random.gauss(0.0, 1.0) for _ in range(TemporalFeatures.FEATURE_COUNT)]
+            for _ in range(TemporalFeatures.WINDOW_SIZE)
+        ]
+    )
+
+
+def _synthetic_depth_matrix() -> DepthMatrix:
+    """Placeholder Stream 2 input — see _synthetic_temporal_features()."""
+    return DepthMatrix(
+        grid=[
+            [random.random() for _ in range(DepthMatrix.SIZE)]
+            for _ in range(DepthMatrix.SIZE)
+        ]
+    )
 
 
 @app.get("/health")
@@ -62,11 +110,11 @@ async def process_arbitrage_intent(
             metrics={},
         )
 
-    signal = await evaluate_spread(
-        symbol=request.symbol,
-        exchange_buy=request.exchange_buy,
-        exchange_sell=request.exchange_sell,
-    )
+    temporal = _synthetic_temporal_features()
+    depth = _synthetic_depth_matrix()
+    # evaluate_spread is synchronous (a plain torch forward pass under
+    # @torch.no_grad()) — run it off the event loop thread.
+    signal = await asyncio.to_thread(evaluate_spread, _get_model(), temporal, depth)
 
     limits = RiskLimits(min_alpha_bps=request.min_alpha_bps)
 
