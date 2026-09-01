@@ -17,7 +17,6 @@ import logging
 
 from fastapi import Depends, FastAPI
 
-from backend.api.auth import get_current_user_id
 from backend.api.contracts import TradeSignalRequest, TradeSignalResponse
 from backend.api.rate_limit import rate_limit_dependency
 from backend.schemas import RiskLimits
