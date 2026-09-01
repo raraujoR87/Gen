@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Literal, Optional, Protocol
 
-from backend.schemas import ExecutionStatus, TradeExecutionResult
+from backend.schemas import ArbitrageSignal, ExecutionStatus, TradeExecutionResult
+
+if TYPE_CHECKING:
+    from backend.api.contracts import TradeSignalRequest
 
 Side = Literal["buy", "sell"]
 
@@ -208,3 +211,27 @@ class BrokenLegMitigator:
             filled_total += result.filled_amount
 
         return filled_total
+
+
+async def dispatch_orders(
+    *, request: "TradeSignalRequest", signal: ArbitrageSignal
+) -> TradeExecutionResult:
+    """Orchestration entrypoint used by backend.api.main.process_arbitrage_intent.
+
+    NOT YET WIRED to live trading: constructing a real BrokenLegMitigator
+    requires a concrete ExchangeClient (a ccxt-async adapter built from the
+    user's decrypted API keys — see backend.security) and live buy/sell
+    prices (see backend.marketdata), neither of which this function has
+    access to. It raises rather than dispatching with fabricated prices, so
+    a request that reaches this point fails loudly (the API layer converts
+    this into a SIGNAL_REJECTED response, never a fabricated trade).
+
+    Wiring real execution (constructing per-user ExchangeClient instances
+    and sourcing live prices) is a pre-launch task — see the checklist in
+    DEPLOY.md before setting TRADING_MODE=live.
+    """
+    raise NotImplementedError(
+        "Live order dispatch is not wired yet: backend.execution.broken_leg.dispatch_orders "
+        "needs a real ExchangeClient (from backend.security-issued credentials) and live "
+        "prices (from backend.marketdata). See DEPLOY.md's pre-launch checklist."
+    )
