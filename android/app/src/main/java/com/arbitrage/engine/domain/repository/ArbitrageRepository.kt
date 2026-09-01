@@ -6,14 +6,11 @@ import com.arbitrage.engine.domain.model.TradeSignalRequest
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Domain-facing contract for the arbitrage data layer.
+ * Boundary between the domain layer and the data layer (Ktor/Retrofit + SSE + local
+ * persistence). Implemented by `data/repository/ArbitrageRepositoryImpl.kt`.
  *
- * NOTE: this is a minimal placeholder interface owned by the data-layer
- * unit (unit 7) so `data/repository/ArbitrageRepositoryImpl` and the
- * presentation-layer use cases have something to compile against without
- * blocking on unit 8 (domain use cases). Unit 8 owns `domain/` and may
- * relocate, rename, or extend this interface — coordinate before editing
- * it further.
+ * NOTE: this interface is shared across parallel work units — keep its signatures
+ * stable to avoid merge conflicts with the data-layer implementation.
  */
 interface ArbitrageRepository {
 
@@ -31,4 +28,9 @@ interface ArbitrageRepository {
 
     /** Live bot/kill-switch status messages for the current user. */
     fun streamBotStatus(): Flow<String>
+
+    /**
+     * Engages/disengages the remote kill switch, halting/resuming trade execution.
+     */
+    suspend fun setKillSwitch(engaged: Boolean)
 }
