@@ -24,7 +24,6 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from backend.ml.model import BimodalArbitrageNet
-from backend.schemas import DepthMatrix, TemporalFeatures
 
 
 @dataclass
