@@ -81,7 +81,7 @@ def test_process_arbitrage_intent_rejects_wrong_secret(client):
 
 
 def test_process_arbitrage_intent_approved(client, monkeypatch):
-    async def fake_evaluate_spread(*, symbol, exchange_buy, exchange_sell):
+    def fake_evaluate_spread(model, temporal, depth):
         return ArbitrageSignal(
             execution_probability=0.95,
             expected_alpha_bps=30.0,
@@ -126,7 +126,7 @@ def test_process_arbitrage_intent_approved(client, monkeypatch):
 
 
 def test_process_arbitrage_intent_rejected(client, monkeypatch):
-    async def fake_evaluate_spread(*, symbol, exchange_buy, exchange_sell):
+    def fake_evaluate_spread(model, temporal, depth):
         return ArbitrageSignal(
             execution_probability=0.4,
             expected_alpha_bps=5.0,
@@ -167,7 +167,7 @@ def test_process_arbitrage_intent_user_id_mismatch(client):
 
 
 def test_rate_limit_exceeded(client, monkeypatch):
-    async def fake_evaluate_spread(*, symbol, exchange_buy, exchange_sell):
+    def fake_evaluate_spread(model, temporal, depth):
         return ArbitrageSignal(execution_probability=0.4, expected_alpha_bps=5.0, adverse_hazard=0.5)
 
     def fake_should_execute(*, net_alpha_bps, signal, limits, trade_notional_usd=None, daily_notional_used_usd=0.0):
