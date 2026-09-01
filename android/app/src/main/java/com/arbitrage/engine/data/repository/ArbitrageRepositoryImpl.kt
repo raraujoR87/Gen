@@ -51,6 +51,11 @@ class ArbitrageRepositoryImpl(
         emitAll(telemetryClient.streamBotStatus(userId))
     }
 
+    override suspend fun setKillSwitch(engaged: Boolean) {
+        val userId = requireActiveUserId()
+        apiService.setKillSwitch(userId, mapOf("engaged" to engaged))
+    }
+
     private fun requireActiveUserId(): String =
         secureKeyStore.readEncrypted(SecureKeyStore.KEY_ACTIVE_USER_ID)
             ?: error("No active user session — cannot stream telemetry without a signed-in user")
