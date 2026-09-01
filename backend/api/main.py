@@ -16,34 +16,40 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 
 from backend.api.contracts import TradeSignalRequest, TradeSignalResponse
+from backend.api.dashboard import router as dashboard_router
 from backend.api.rate_limit import rate_limit_dependency
+from backend.ml.model_cache import get_model as _get_model
 from backend.schemas import DepthMatrix, RiskLimits, TemporalFeatures
 
 logger = logging.getLogger("backend.api.main")
 
-app = FastAPI(title="Bimodal Arbitrage API Gateway")
 
-_model = None  # lazily-constructed, process-wide BimodalArbitrageNet singleton
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Launches the local paper-trading runner (backend.marketdata.runner)
+    as a background task, unless disabled via RUNNER_ENABLED=false.
 
-
-def _get_model():
-    """Returns a cached BimodalArbitrageNet instance, constructing it once.
-
-    Untrained (randomly initialized) weights — see docs/ARCHITECTURE.md
-    section 9, Fase 1: this must be replaced with a checkpoint loaded via
-    backend.ml.train.load_checkpoint before TRADING_MODE=live.
+    This is the local-service entry point the user chose over an Android
+    app for the initial validation phase: real market data drives the
+    model, but only simulated (paper) orders are ever placed — see
+    backend.marketdata.runner and backend.execution.paper_exchange.
     """
-    global _model
-    if _model is None:
-        from backend.ml.model import BimodalArbitrageNet
+    from backend.marketdata.runner import run_forever
 
-        _model = BimodalArbitrageNet()
-        _model.eval()
-    return _model
+    runner_task = asyncio.create_task(run_forever())
+    try:
+        yield
+    finally:
+        runner_task.cancel()
+
+
+app = FastAPI(title="Bimodal Arbitrage API Gateway", lifespan=_lifespan)
+app.include_router(dashboard_router)
 
 
 def _synthetic_temporal_features() -> TemporalFeatures:
@@ -149,7 +155,7 @@ async def process_arbitrage_intent(
             request=request,
             signal=signal,
         )
-    except Exception:  # noqa: BLE001 - dispatch failures must not 500 the API
+    except Exception:
         logger.exception("Order dispatch failed for user_id=%s symbol=%s", user_id, request.symbol)
         return TradeSignalResponse(
             status="SIGNAL_REJECTED",

@@ -19,6 +19,21 @@ async def create_user(session: AsyncSession, email: str) -> User:
     return user
 
 
+async def get_or_create_user_by_email(session: AsyncSession, email: str) -> User:
+    """Return the existing user with this email, creating one if needed.
+
+    User.email is unique, so the local runner (which bootstraps the same
+    LOCAL_USER_EMAIL on every process restart) needs this instead of
+    create_user, which would violate that constraint after the first run.
+    """
+    stmt = select(User).where(User.email == email)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+    if user is not None:
+        return user
+    return await create_user(session, email)
+
+
 async def create_exchange_account(
     session: AsyncSession,
     user_id: uuid.UUID,
