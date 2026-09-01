@@ -25,7 +25,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from backend.schemas import DepthMatrix, TemporalFeatures
+from backend.schemas import TemporalFeatures
 
 
 class CrossAttentionFusion(nn.Module):
