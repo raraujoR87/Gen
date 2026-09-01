@@ -71,7 +71,17 @@ async def process_arbitrage_intent(
 
     limits = RiskLimits(min_alpha_bps=request.min_alpha_bps)
 
-    approved, reason = should_execute(signal=signal, request=request, limits=limits)
+    # net_alpha_bps: the model's own alpha head (signal.expected_alpha_bps)
+    # already estimates net alpha in bps for this candidate opportunity — see
+    # backend.ml.model.BimodalArbitrageNet's alpha_head and
+    # backend.execution.alpha.compute_net_alpha for the underlying formula
+    # this estimate approximates.
+    approved, reason = should_execute(
+        net_alpha_bps=signal.expected_alpha_bps,
+        signal=signal,
+        limits=limits,
+        trade_notional_usd=request.capital_allocation_usd,
+    )
 
     metrics = {
         "execution_probability": signal.execution_probability,
