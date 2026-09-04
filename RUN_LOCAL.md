@@ -5,8 +5,10 @@ single Python process, on your own machine, that
 
 1. connects to **real** exchange market data (order books, via `ccxt`/
    `ccxt.pro`),
-2. feeds that real data into the bimodal ML model to decide whether an
-   arbitrage opportunity is worth taking, and
+2. feeds that real data into a signal estimator to decide whether an
+   arbitrage opportunity is worth taking (see "About the intelligence"
+   below — this is a real statistic computed from market history, not a
+   trained neural network, at least not yet), and
 3. **simulates** the resulting trade (paper trading) — it prices the fill
    against the real order book but never sends a real order to any
    exchange.
@@ -194,23 +196,63 @@ and every simulated execution actually persisted to `local.db`.
 To stop trading without stopping the process, click **Engage** on the
 dashboard, or `POST /api/kill-switch/engage`.
 
+## About the intelligence: heuristic today, trained model later
+
+`BimodalArbitrageNet` (`backend/ml/model.py`) is a real Bi-LSTM + CNN +
+cross-attention architecture, but `backend/ml/model_cache.py` constructs it
+with **random, untrained weights** — its output today is noise, not a
+signal. Training it for real needs labeled historical L2 order book data,
+and that isn't something you can download: exchanges only expose the
+*current* book, not its history. So there's no shortcut to "just train it
+now" — a real dataset can only be built by running this service and
+recording what actually happened, over real wall-clock time.
+
+Given that, the runner's actual decision signal is
+`backend.ml.heuristic.HeuristicSignalEstimator` — not a model, a
+transparent statistic computed directly from each pair's own recent real
+history, with no randomness and nothing fabricated:
+
+- **execution_probability** — the fraction of the last 30 ticks where the
+  real net alpha was already positive. An opportunity that's only
+  positive for one flickering instant is a bad bet even if that instant
+  looks great; one that's persistently positive is a real, decision-worthy
+  signal.
+- **adverse_hazard** — recent realized volatility of the mid-price return,
+  scaled to `[0, 1]`. Higher volatility means a higher chance the price
+  moves against an open leg before it can be hedged.
+- **expected_alpha_bps** — not estimated at all; it's the real
+  `compute_net_alpha` value computed from the two exchanges' actual order
+  books.
+
+This is genuinely better than the untrained model at hunting real
+opportunities today, precisely because it's grounded in this run's own
+observed market behavior rather than random weights. It's still a simple,
+first-pass heuristic, not a calibrated statistical model — see
+`backend/ml/heuristic.py`'s docstring for exactly what it does and doesn't
+account for.
+
+**Building the real dataset**: every evaluated tick — approved or not —
+is appended to `SAMPLE_LOG_PATH` (default `data/training_samples.jsonl`)
+by `backend.marketdata.sample_logger.SampleLogger`: the real
+`TemporalFeatures`/`DepthMatrix` tensors plus the real `net_alpha_bps` for
+that tick. Nothing is labeled yet (a label needs a forward-looking
+outcome, which a single tick doesn't have) — that join, plus actually
+running `backend/ml/train.py` against it, is future work once there's
+enough logged history to be worth it. Set `SAMPLE_LOGGING_ENABLED=false`
+in `.env` to turn this off (e.g. to save disk space) without affecting
+anything else.
+
 ## What this does and doesn't prove
 
 - **Does**: exercise the real market-data ingestion, feature engineering,
-  ML inference, and risk-gate code paths against live prices, and measure
-  whether the model's approved signals would have been net-profitable, with
-  the paper exchange's optimistic fill assumption (every accepted order
-  fills in full at the requested price — no partial fills, latency, or
-  slippage beyond what `compute_net_alpha`'s `slippage_est` already
-  accounts for).
+  heuristic signal, and risk-gate code paths against live prices, and
+  measure whether the heuristic's approved signals would have been
+  net-profitable, with the paper exchange's optimistic fill assumption
+  (every accepted order fills in full at the requested price — no partial
+  fills, latency, or slippage beyond what `compute_net_alpha`'s
+  `slippage_est` already accounts for).
 - **Doesn't**: prove profitability under real execution conditions (queue
   position, partial fills, real slippage, exchange downtime) — that's what
   a subsequent real-money pilot, with tight `RiskLimits`, would need to
-  validate before scaling up or building the Android app.
-- **Model weights are untrained** (`backend/ml/model_cache.py` constructs
-  `BimodalArbitrageNet` with random initialization). Signals right now
-  reflect an untrained model, not a validated trading strategy — training
-  on real historical data (`backend/ml/train.py`) is a prerequisite before
-  this run's results mean anything. `RUN_LOCAL.md` intentionally does not
-  paper over that: the dashboard shows exactly what the model outputs, so
-  it's visible when it's not doing anything useful yet.
+  validate before scaling up or building the Android app. It also doesn't
+  yet reflect a trained model — see above.

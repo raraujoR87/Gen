@@ -15,12 +15,20 @@ This is the "real data + paper trading" mode the user chose: real market
 data drives the model's decision, but no real order is ever sent — see
 backend.execution.broken_leg.dispatch_orders (raises NotImplementedError)
 for the live path, which this runner never touches.
+
+Signal source: BimodalArbitrageNet (backend.ml.model) is untrained —
+random weights, not real intelligence — so the actual decision signal
+here comes from backend.ml.heuristic.HeuristicSignalEstimator, a
+transparent statistic computed from this pair's own real recent history
+(net alpha persistence and price volatility), not a trained model. Every
+evaluated tick is also logged (backend.marketdata.sample_logger) so a
+real, non-fabricated training set accumulates for when there's enough of
+it to actually train the model.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import statistics
 
 from backend.config import PairConfig, RunnerConfig, load_runner_config
 from backend.db.repository import get_or_create_user_by_email, record_execution
@@ -32,20 +40,19 @@ from backend.execution.paper_exchange import PaperExchangeClient
 from backend.marketdata.features import DepthMatrixBuilder, TemporalFeatureWindow
 from backend.marketdata.microstructure import compute_vwap
 from backend.marketdata.orderbook_cache import OrderBookCache
+from backend.marketdata.sample_logger import SampleLogger
 from backend.marketdata.ws_ingestion import get_default_feed
-from backend.ml.inference import evaluate_spread
-from backend.ml.model_cache import get_model
+from backend.ml.heuristic import HeuristicSignalEstimator
 from backend.runtime_state import STATE
 from backend.schemas import OrderBookSnapshot, RiskLimits
 
 logger = logging.getLogger(__name__)
 
-# How many mid_price_return samples to look at for the high-volatility
-# heuristic, and the stdev threshold (as a fraction) above which a broken
-# leg is hedged with an immediate market order instead of a re-pegged limit
-# order. Simple, documented heuristic — not a calibrated volatility model.
-_VOLATILITY_LOOKBACK = 20
-_HIGH_VOLATILITY_STDEV_THRESHOLD = 0.001
+# adverse_hazard (from HeuristicSignalEstimator, itself real recent price
+# volatility scaled to [0, 1]) above this threshold routes a broken leg to
+# immediate market liquidation instead of a re-pegged limit order — see
+# BrokenLegMitigator._auto_hedge's high_volatility branch.
+_HIGH_VOLATILITY_HAZARD_THRESHOLD = 0.5
 
 
 class PairMonitor:
@@ -62,7 +69,8 @@ class PairMonitor:
         self._cache = cache
         self._config = config
         self._user_id = user_id
-        self._model = get_model()
+        self._heuristic = HeuristicSignalEstimator()
+        self._sample_logger = SampleLogger(config.sample_log_path) if config.sample_logging_enabled else None
         self._client = PaperExchangeClient(cache)
         self._mitigator = BrokenLegMitigator(self._client)
 
@@ -139,7 +147,19 @@ class PairMonitor:
             return
         net_alpha_bps = net_alpha * 1e4
 
-        signal = await asyncio.to_thread(evaluate_spread, self._model, temporal, depth)
+        if self._sample_logger is not None:
+            await asyncio.to_thread(
+                self._sample_logger.log,
+                symbol=self.pair.symbol,
+                exchange_buy=self.pair.exchange_buy,
+                exchange_sell=self.pair.exchange_sell,
+                temporal=temporal,
+                depth=depth,
+                net_alpha_bps=net_alpha_bps,
+            )
+
+        mid_price_return = temporal.window[-1][0]  # most recent tick's first feature
+        signal = self._heuristic.update(net_alpha_bps=net_alpha_bps, mid_price_return=mid_price_return)
 
         limits = STATE.kill_switch.apply(RiskLimits())
         approved, reason = should_execute(
@@ -164,7 +184,7 @@ class PairMonitor:
         if not approved:
             return
 
-        high_volatility = self._is_high_volatility()
+        high_volatility = signal.adverse_hazard > _HIGH_VOLATILITY_HAZARD_THRESHOLD
         result = await self._mitigator.execute_paired_orders(
             buy_exchange=self.pair.exchange_buy,
             sell_exchange=self.pair.exchange_sell,
@@ -184,13 +204,6 @@ class PairMonitor:
 
         async with AsyncSessionLocal() as session:
             await record_execution(session, result, self._user_id)
-
-    def _is_high_volatility(self) -> bool:
-        rows = list(self._temporal_window._rows)[-_VOLATILITY_LOOKBACK:]
-        if len(rows) < 2:
-            return False
-        returns = [row[0] for row in rows]  # mid_price_return is column 0
-        return statistics.pstdev(returns) > _HIGH_VOLATILITY_STDEV_THRESHOLD
 
 
 async def run_forever(config: RunnerConfig | None = None) -> None:

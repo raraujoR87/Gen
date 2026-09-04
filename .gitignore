@@ -16,5 +16,9 @@ android/build/
 android/**/*.iml
 .idea/
 
+# local paper-trading runtime data (SQLite DB, logged training samples)
+local.db
+data/
+
 # misc
 .DS_Store

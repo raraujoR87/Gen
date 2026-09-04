@@ -44,6 +44,8 @@ class RunnerConfig:
     local_user_email: str
     redis_url: str
     enabled: bool
+    sample_logging_enabled: bool
+    sample_log_path: str
 
 
 def load_runner_config() -> RunnerConfig:
@@ -56,4 +58,6 @@ def load_runner_config() -> RunnerConfig:
         local_user_email=os.environ.get("LOCAL_USER_EMAIL", "local@paper-trading.dev"),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
         enabled=os.environ.get("RUNNER_ENABLED", "true").lower() in ("1", "true", "yes"),
+        sample_logging_enabled=os.environ.get("SAMPLE_LOGGING_ENABLED", "true").lower() in ("1", "true", "yes"),
+        sample_log_path=os.environ.get("SAMPLE_LOG_PATH", "data/training_samples.jsonl"),
     )
