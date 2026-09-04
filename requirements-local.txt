@@ -1,0 +1,34 @@
+# Dependencies for running the local paper-trading service (RUN_LOCAL.md /
+# run_local.bat) with a SQLite database — everything in requirements.txt
+# EXCEPT asyncpg and modal, which this mode never imports:
+#
+#   - asyncpg: only used via DATABASE_URL's postgresql+asyncpg:// driver
+#     (backend/db/session.py). SQLite uses aiosqlite instead. asyncpg often
+#     has no prebuilt wheel yet for the newest Python releases (e.g. 3.14 at
+#     time of writing) and fails to build from source without a full C
+#     toolchain — skipping it avoids that build entirely for local use.
+#   - modal: only used by Modal.com cloud deployment; backend/security/kms.py
+#     already imports it behind a try/except ImportError guard, so its
+#     absence is a supported, tested configuration (the dev-fallback KMS key
+#     path), not a hack.
+#
+# Keep this file's other pins in sync with requirements.txt by hand — it is
+# a subset, not a fork.
+
+torch==2.3.0
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+ccxt==4.3.40
+cryptography==42.0.7
+argon2-cffi==23.1.0
+numpy==1.26.4
+pydantic==2.7.1
+pyjwt==2.8.0
+sqlalchemy[asyncio]==2.0.30
+alembic==1.13.1
+redis==5.0.4
+pytest==8.2.0
+pytest-asyncio==0.23.6
+httpx==0.27.0
+python-dotenv==1.0.1
+aiosqlite==0.20.0

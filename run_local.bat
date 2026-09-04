@@ -32,7 +32,7 @@ if not exist ".venv\Scripts\python.exe" (
 call .venv\Scripts\activate.bat
 
 echo Installing dependencies ...
-pip install -q -r requirements.txt
+pip install -q -r requirements-local.txt
 if errorlevel 1 (
     echo pip install failed — see the output above.
     exit /b 1

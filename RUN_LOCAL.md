@@ -97,11 +97,20 @@ yourself and it will be used automatically if present
 
 ## 3. Install dependencies and create the database
 
+Use `requirements-local.txt`, not `requirements.txt`, for this mode:
+it's the same pins minus `asyncpg` and `modal`, which this SQLite-based
+local mode never imports (`asyncpg` is the Postgres driver; `modal` is
+Modal.com cloud deployment only, already behind an optional-import guard
+in `backend/security/kms.py`). This matters in practice: `asyncpg==0.29.0`
+often has no prebuilt wheel yet for the newest Python releases and then
+tries to compile from source, which fails without a full C build toolchain
+— skipping it sidesteps that entirely for local use.
+
 **Linux/macOS:**
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 python scripts/init_db.py
 ```
 
@@ -110,7 +119,7 @@ python scripts/init_db.py
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 python scripts\init_db.py
 ```
 

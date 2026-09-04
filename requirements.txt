@@ -15,5 +15,6 @@ modal==0.62.185
 pytest==8.2.0
 pytest-asyncio==0.23.6
 httpx==0.27.0
+python-dotenv==1.0.1
 # Test-only: SQLite async driver for backend/db in-memory tests (tests/test_db.py)
 aiosqlite==0.20.0
