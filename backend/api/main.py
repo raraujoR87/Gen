@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -27,6 +28,16 @@ from backend.ml.model_cache import get_model as _get_model
 from backend.schemas import DepthMatrix, RiskLimits, TemporalFeatures
 
 logger = logging.getLogger("backend.api.main")
+
+if sys.platform == "win32":
+    # aiohttp (via ccxt's async REST/websocket clients) uses aiodns for DNS
+    # resolution when it's installed, and aiodns (pycares) does not support
+    # asyncio's default Windows event loop (ProactorEventLoop) — it needs a
+    # selector loop. Without this, every outbound ccxt request on Windows
+    # fails with "Could not contact DNS servers" even though the machine's
+    # own DNS works fine for everything else. Must run before uvicorn
+    # creates its event loop, so this sits at import time of the app module.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @asynccontextmanager
