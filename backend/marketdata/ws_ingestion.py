@@ -108,7 +108,13 @@ class MarketDataFeed(abc.ABC):
 class CcxtProFeed(MarketDataFeed):
     """Production adapter: streams L2 order books via ccxt.pro websockets."""
 
-    def __init__(self, exchange_id: str, symbol: str, limit: int = 50) -> None:
+    def __init__(self, exchange_id: str, symbol: str, limit: int = 100) -> None:
+        # 100 rather than an arbitrary depth: several exchanges' watchOrderBook
+        # (this is the websocket streaming call, unlike REST fetch_order_book)
+        # only accept a fixed enum of depths — e.g. Kraken raises NotSupported
+        # for anything outside {10, 25, 100, 500, 1000}. 100 is valid on every
+        # exchange we've hit this with and is deep enough for
+        # DepthMatrixBuilder's rebinning (backend/marketdata/features.py).
         super().__init__(exchange_id, symbol)
         try:
             import ccxt.pro as ccxtpro  # type: ignore[import-not-found]
