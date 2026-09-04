@@ -27,6 +27,25 @@ if you ever want that instead), but for local paper-trading validation
 SQLite is simpler and the models already support it — see
 `backend/db/models.py`'s `GUID` type.
 
+## 0. Use Python 3.11 or 3.12 — not 3.13/3.14
+
+This project's pinned dependencies (`torch`, `numpy`, `pydantic-core`, ...)
+ship prebuilt wheels for Python 3.11 and 3.12. A newer interpreter (3.13,
+and especially 3.14 at time of writing) commonly has no prebuilt wheel yet
+for one or more of them, so `pip install` falls back to compiling from
+source — which then fails unless you have a full Rust/C++ toolchain
+matching exactly what each library's build expects (`pydantic-core`'s
+build failing with "the configured Python interpreter version (3.14) is
+newer than PyO3's maximum supported version" is this exact situation).
+
+If `python --version` reports 3.13+, install Python 3.12 from
+[python.org](https://www.python.org/downloads/) (check "Add python.exe to
+PATH" during install) alongside whatever you already have — no need to
+uninstall anything. `run_local.bat` (step 4 below) automatically picks
+3.12 over a newer interpreter via the Windows `py` launcher, so once it's
+installed you can just re-run the script. Manually, use `py -3.12` instead
+of `python` wherever it appears below.
+
 ## 1. Install and start Redis (native, not Docker)
 
 The order-book cache (`backend/marketdata/orderbook_cache.py`) is
@@ -117,11 +136,15 @@ python scripts/init_db.py
 **Windows (PowerShell):**
 
 ```powershell
-python -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements-local.txt
 python scripts\init_db.py
 ```
+
+(Use `py -3.12` — or `python`, if that's already a 3.11/3.12 install — per
+step 0 above; a 3.13+ interpreter here will hit the same wheel-building
+failures.)
 
 (If `Activate.ps1` is blocked by execution policy, either run PowerShell
 as administrator once and `Set-ExecutionPolicy -Scope CurrentUser
