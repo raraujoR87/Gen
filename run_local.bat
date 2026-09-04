@@ -56,6 +56,15 @@ if not errorlevel 1 (
     echo.
 )
 
+if exist ".venv\Scripts\python.exe" (
+    for /f "tokens=1" %%v in ('.venv\Scripts\python.exe -c "import sys; print(sys.version.split()[0])"') do set "VENV_PY_VERSION=%%v"
+    echo %VENV_PY_VERSION% | findstr /r "^3\.1[34]\." >nul
+    if not errorlevel 1 (
+        echo Existing .venv uses Python %VENV_PY_VERSION% ^(too new — see warning above^); deleting and recreating it with %PY_CMD% ...
+        rmdir /s /q .venv
+    )
+)
+
 if not exist ".venv\Scripts\python.exe" (
     echo Creating virtual environment in .venv ...
     %PY_CMD% -m venv .venv
