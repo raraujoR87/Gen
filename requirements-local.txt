@@ -19,6 +19,11 @@ torch==2.3.0
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 ccxt==4.3.40
+# See requirements.txt for why this is pinned: ccxt only declares
+# aiohttp>=3.8, so an unpinned install resolves to a newer aiohttp whose
+# rewritten (C-based) websocket reader/writer breaks ccxt.pro's websocket
+# client (missing attributes like parse_frame it monkeypatches directly).
+aiohttp==3.9.5
 cryptography==42.0.7
 argon2-cffi==23.1.0
 numpy==1.26.4
