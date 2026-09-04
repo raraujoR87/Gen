@@ -30,13 +30,22 @@ from backend.schemas import DepthMatrix, RiskLimits, TemporalFeatures
 logger = logging.getLogger("backend.api.main")
 
 if sys.platform == "win32":
-    # aiohttp (via ccxt's async REST/websocket clients) uses aiodns for DNS
-    # resolution when it's installed, and aiodns (pycares) does not support
-    # asyncio's default Windows event loop (ProactorEventLoop) — it needs a
-    # selector loop. Without this, every outbound ccxt request on Windows
-    # fails with "Could not contact DNS servers" even though the machine's
-    # own DNS works fine for everything else. Must run before uvicorn
-    # creates its event loop, so this sits at import time of the app module.
+    # ccxt requires aiodns, and aiohttp (which ccxt's async clients use)
+    # prefers aiodns for DNS resolution whenever it's importable. aiodns
+    # (pycares/c-ares) frequently cannot read Windows' DNS configuration
+    # correctly and fails with "Could not contact DNS servers"
+    # (aiodns.error.DNSError errno 11, ECONNREFUSED) even though the
+    # machine's own DNS works fine for everything else — switching the
+    # asyncio event loop policy alone does not fix this. Poisoning the
+    # module cache here (before aiohttp.resolver's own `import aiodns`
+    # runs anywhere in the process) makes that import fail, so aiohttp
+    # falls back to ThreadedResolver — plain socket.getaddrinfo, the same
+    # resolution path every other program on the machine already uses.
+    sys.modules["aiodns"] = None  # type: ignore[assignment]
+
+    # Belt-and-suspenders: also avoid ProactorEventLoop, since it doesn't
+    # support add_reader/add_writer used by some libraries' fallback
+    # resolvers and is a known source of other asyncio-on-Windows quirks.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
