@@ -24,6 +24,18 @@ if not exist ".env" (
     copy .env.example .env >nul
 )
 
+REM This script's mode is SQLite-only (never Postgres) — .env.example's
+REM DATABASE_URL defaults to Postgres for the production/CI path, so a
+REM freshly copied (or never-edited) .env still has that default and
+REM requires asyncpg, which requirements-local.txt deliberately omits.
+REM Auto-fix that one line rather than failing opaquely with
+REM "ModuleNotFoundError: No module named 'asyncpg'" during DB init.
+findstr /r "^DATABASE_URL=postgresql" ".env" >nul 2>nul
+if not errorlevel 1 (
+    echo Rewriting DATABASE_URL in .env to a local SQLite file ^(this script never uses Postgres^) ...
+    powershell -NoProfile -Command "(Get-Content '.env') -replace '^DATABASE_URL=.*', 'DATABASE_URL=sqlite+aiosqlite:///./local.db' | Set-Content '.env'"
+)
+
 REM Prefer Python 3.12, then 3.11, via the "py" launcher (installed with any
 REM python.org build); fall back to whatever "python" resolves to on PATH.
 set "PY_CMD="
