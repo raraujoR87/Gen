@@ -109,12 +109,15 @@ class CcxtProFeed(MarketDataFeed):
     """Production adapter: streams L2 order books via ccxt.pro websockets."""
 
     def __init__(self, exchange_id: str, symbol: str, limit: int = 100) -> None:
-        # 100 rather than an arbitrary depth: several exchanges' watchOrderBook
-        # (this is the websocket streaming call, unlike REST fetch_order_book)
-        # only accept a fixed enum of depths — e.g. Kraken raises NotSupported
-        # for anything outside {10, 25, 100, 500, 1000}. 100 is valid on every
-        # exchange we've hit this with and is deep enough for
-        # DepthMatrixBuilder's rebinning (backend/marketdata/features.py).
+        # 100 is only a fallback default here — several exchanges'
+        # watchOrderBook (the websocket streaming call, unlike REST
+        # fetch_order_book) only accept a fixed enum of depths, and it's a
+        # *different* enum per exchange: Kraken accepts {10, 25, 100, 500,
+        # 1000}, but Bybit spot only accepts {1, 50, 200} and rejects 100
+        # outright ("Invalid topic: orderbook.100.ETHUSDT"). There is no
+        # single value that satisfies every exchange, so callers that care
+        # (get_default_feed below) should pass an exchange-appropriate
+        # limit explicitly rather than relying on this default.
         super().__init__(exchange_id, symbol)
         try:
             import ccxt.pro as ccxtpro  # type: ignore[import-not-found]
@@ -167,8 +170,22 @@ class CcxtRestPollingFeed(MarketDataFeed):
         await self._exchange.close()
 
 
+# Order-book depth ("limit") accepted by each exchange's watchOrderBook
+# websocket subscription. This is a fixed, exchange-specific enum server-side
+# (not validated client-side by ccxt for every exchange, so a wrong value
+# fails at the exchange rather than in ccxt) — there is no single number
+# that works everywhere. Add an entry here before adding a new exchange to
+# MONITORED_PAIRS if it rejects the fallback default of 100.
+_DEFAULT_DEPTH_BY_EXCHANGE = {
+    "kraken": 100,  # accepts {10, 25, 100, 500, 1000}
+    "bybit": 50,  # spot accepts {1, 50, 200}; 100 is rejected
+    "binance": 100,  # accepts arbitrary depths
+}
+
+
 def get_default_feed(exchange_id: str, symbol: str, **kwargs) -> MarketDataFeed:
     """Build the best available feed: ccxt.pro if importable, REST polling otherwise."""
+    kwargs.setdefault("limit", _DEFAULT_DEPTH_BY_EXCHANGE.get(exchange_id, 100))
     try:
         return CcxtProFeed(exchange_id, symbol, **kwargs)
     except RuntimeError:
