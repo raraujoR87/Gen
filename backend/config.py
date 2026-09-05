@@ -48,6 +48,34 @@ class RunnerConfig:
     sample_log_path: str
 
 
+# Generic public tier-0 spot taker fees, in bps — NOT the user's actual
+# negotiated/VIP rate (we have no account/API-key context to know that).
+# Previously every exchange used one flat DEFAULT_TAKER_FEE_BPS value
+# regardless of which one it actually was, which understated Kraken's real
+# cost (materially higher than Binance/Bybit's) in every net-alpha
+# calculation. Override per exchange via EXCHANGE_TAKER_FEE_BPS_<EXCHANGE>
+# (e.g. EXCHANGE_TAKER_FEE_BPS_KRAKEN=16 if your account tier differs).
+_DEFAULT_TAKER_FEE_BPS_BY_EXCHANGE = {
+    "binance": 10.0,  # 0.10% standard spot taker
+    "bybit": 10.0,  # 0.10% standard spot taker
+    "kraken": 26.0,  # 0.26% standard taker — notably higher than the other two
+}
+
+
+def get_taker_fee_bps(exchange_id: str, default_fee_bps: float) -> float:
+    """Per-exchange taker fee in bps, for use in compute_net_alpha.
+
+    Checks EXCHANGE_TAKER_FEE_BPS_<EXCHANGE> first (exact override for your
+    account), then the generic per-exchange defaults above, then falls back
+    to `default_fee_bps` (RunnerConfig.default_taker_fee_bps) for any
+    exchange not listed.
+    """
+    override = os.environ.get(f"EXCHANGE_TAKER_FEE_BPS_{exchange_id.upper()}")
+    if override is not None:
+        return float(override)
+    return _DEFAULT_TAKER_FEE_BPS_BY_EXCHANGE.get(exchange_id, default_fee_bps)
+
+
 def load_runner_config() -> RunnerConfig:
     raw_pairs = os.environ.get("MONITORED_PAIRS", "")
     return RunnerConfig(

@@ -56,8 +56,23 @@ class HeuristicSignalEstimator:
         self._alpha_history: deque[float] = deque(maxlen=self._config.window_size)
         self._return_history: deque[float] = deque(maxlen=self._config.window_size)
 
-    def update(self, net_alpha_bps: float, mid_price_return: float) -> ArbitrageSignal:
-        """Feed the latest real tick and return the resulting signal."""
+    def update(
+        self,
+        net_alpha_bps: float,
+        mid_price_return: float,
+        depth_liquidity_hazard: float = 0.0,
+    ) -> ArbitrageSignal:
+        """Feed the latest real tick and return the resulting signal.
+
+        `depth_liquidity_hazard` is an optional real signal from
+        backend.ml.depth_signal.compute_depth_liquidity_hazard — how much of
+        the resting order-book depth near the touch this trade's own size
+        would consume, in [0, 1]. Combined with the volatility-based hazard
+        via max(), not an average: either one alone is a real, independent
+        reason for caution (a calm, thin book is still risky; a volatile,
+        deep book still is too), so the more cautious of the two should win
+        rather than be diluted by the other.
+        """
         self._alpha_history.append(net_alpha_bps)
         self._return_history.append(mid_price_return)
 
@@ -71,7 +86,8 @@ class HeuristicSignalEstimator:
             stdev_bps = (variance**0.5) * 1e4
         else:
             stdev_bps = 0.0
-        hazard = min(1.0, stdev_bps / self._config.volatility_hazard_scale_bps)
+        volatility_hazard = min(1.0, stdev_bps / self._config.volatility_hazard_scale_bps)
+        hazard = max(volatility_hazard, depth_liquidity_hazard)
 
         return ArbitrageSignal(
             execution_probability=persistence,

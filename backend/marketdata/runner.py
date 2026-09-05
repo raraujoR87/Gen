@@ -20,17 +20,24 @@ Signal source: BimodalArbitrageNet (backend.ml.model) is untrained —
 random weights, not real intelligence — so the actual decision signal
 here comes from backend.ml.heuristic.HeuristicSignalEstimator, a
 transparent statistic computed from this pair's own real recent history
-(net alpha persistence and price volatility), not a trained model. Every
-evaluated tick is also logged (backend.marketdata.sample_logger) so a
-real, non-fabricated training set accumulates for when there's enough of
-it to actually train the model.
+(net alpha persistence and price volatility) plus a real order-book
+liquidity signal from the buy-side DepthMatrix
+(backend.ml.depth_signal.compute_depth_liquidity_hazard) — not a trained
+model. Every evaluated tick is also logged
+(backend.marketdata.sample_logger) so a real, non-fabricated training set
+accumulates for when there's enough of it to actually train the model.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from backend.config import PairConfig, RunnerConfig, load_runner_config
+from backend.config import (
+    PairConfig,
+    RunnerConfig,
+    get_taker_fee_bps,
+    load_runner_config,
+)
 from backend.db.repository import get_or_create_user_by_email, record_execution
 from backend.db.session import AsyncSessionLocal
 from backend.execution.alpha import compute_net_alpha
@@ -42,6 +49,7 @@ from backend.marketdata.microstructure import compute_vwap
 from backend.marketdata.orderbook_cache import OrderBookCache
 from backend.marketdata.sample_logger import SampleLogger
 from backend.marketdata.ws_ingestion import get_default_feed
+from backend.ml.depth_signal import compute_depth_liquidity_hazard
 from backend.ml.heuristic import HeuristicSignalEstimator
 from backend.runtime_state import STATE
 from backend.schemas import OrderBookSnapshot, RiskLimits
@@ -132,13 +140,14 @@ class PairMonitor:
             # Not enough resting depth on one side to fill this quantity.
             return
 
-        tau = self._config.default_taker_fee_bps / 10_000
+        tau_a = get_taker_fee_bps(self.pair.exchange_buy, self._config.default_taker_fee_bps) / 10_000
+        tau_b = get_taker_fee_bps(self.pair.exchange_sell, self._config.default_taker_fee_bps) / 10_000
         try:
             net_alpha = compute_net_alpha(
                 vwap_bid_b=vwap_bid_b,
-                tau_b=tau,
+                tau_b=tau_b,
                 vwap_ask_a=vwap_ask_a,
-                tau_a=tau,
+                tau_a=tau_a,
                 slippage_est=0.0005,
                 transfer_cost=0.0,
                 capital_usd=self._config.notional_per_trade_usd,
@@ -159,7 +168,17 @@ class PairMonitor:
             )
 
         mid_price_return = temporal.window[-1][0]  # most recent tick's first feature
-        signal = self._heuristic.update(net_alpha_bps=net_alpha_bps, mid_price_return=mid_price_return)
+        # Real depth-based liquidity risk: how much of the buy-side book's
+        # resting near-touch liquidity our own order would consume. Uses
+        # `depth` (the buy-exchange DepthMatrix), which was already being
+        # computed every tick but previously only ever logged, never fed
+        # into the decision itself.
+        liquidity_hazard = compute_depth_liquidity_hazard(depth, quantity, side="ask")
+        signal = self._heuristic.update(
+            net_alpha_bps=net_alpha_bps,
+            mid_price_return=mid_price_return,
+            depth_liquidity_hazard=liquidity_hazard,
+        )
 
         limits = STATE.kill_switch.apply(RiskLimits())
         approved, reason = should_execute(

@@ -56,3 +56,17 @@ def test_hazard_is_clipped_to_one():
     estimator.update(net_alpha_bps=0.0, mid_price_return=-0.01)
     signal = estimator.update(net_alpha_bps=0.0, mid_price_return=0.01)
     assert 0.0 <= signal.adverse_hazard <= 1.0
+
+
+def test_depth_liquidity_hazard_dominates_when_higher():
+    estimator = HeuristicSignalEstimator()
+    # Calm market (volatility hazard 0.0) but a thin book (liquidity hazard 0.9).
+    signal = estimator.update(net_alpha_bps=10.0, mid_price_return=0.0, depth_liquidity_hazard=0.9)
+    assert signal.adverse_hazard == 0.9
+
+
+def test_volatility_hazard_dominates_when_higher():
+    estimator = HeuristicSignalEstimator()
+    for r in (0.01, -0.01, 0.01, -0.01, 0.01, -0.01, 0.01, -0.01, 0.01, -0.01):
+        signal = estimator.update(net_alpha_bps=10.0, mid_price_return=r, depth_liquidity_hazard=0.1)
+    assert signal.adverse_hazard == 1.0  # volatility hazard (1.0) beats liquidity hazard (0.1)
