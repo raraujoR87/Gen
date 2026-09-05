@@ -147,6 +147,15 @@ _DASHBOARD_HTML = """<!doctype html>
                padding: 12px 16px; font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-bottom: 18px; }
   .explainer b { color: var(--text); }
 
+  .ticker { overflow: hidden; white-space: nowrap; border: 1px solid var(--panel-border); border-radius: 999px;
+            background: var(--panel); margin-bottom: 16px; padding: 8px 0; }
+  .ticker-track { display: inline-block; padding-left: 100%; animation: ticker-scroll 30s linear infinite; }
+  .ticker:hover .ticker-track { animation-play-state: paused; }
+  @keyframes ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+  .ticker-item { display: inline-flex; align-items: center; gap: 6px; padding: 0 22px; font-size: 12.5px; }
+  .ticker-item .sym { font-weight: 700; }
+  .ticker-item .route { color: var(--muted); font-size: 11px; }
+
   .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
   .stat {
     background: linear-gradient(180deg, var(--panel), #0d0716);
@@ -169,7 +178,9 @@ _DASHBOARD_HTML = """<!doctype html>
   #chart-wrap { position: relative; }
   #chart-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 0; }
 
-  #bubbles { position: relative; height: 260px; }
+  #radar { position: relative; height: 240px; overflow: hidden; border-radius: 10px;
+           background: radial-gradient(ellipse at 50% 100%, rgba(255,46,166,0.05), transparent 70%); }
+  .particle { position: absolute; border-radius: 50%; pointer-events: none; }
   .bubble {
     position: absolute; border-radius: 50%; display: flex; align-items: center; justify-content: center;
     flex-direction: column; text-align: center; transition: all 0.6s ease; cursor: default;
@@ -177,7 +188,7 @@ _DASHBOARD_HTML = """<!doctype html>
   }
   .bubble .pair { font-size: 10px; font-weight: 700; }
   .bubble .val { font-size: 11px; opacity: .85; }
-  #bubbles-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 100px 0 0; }
+  #radar-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 100px 0 0; }
 
   .feed { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
   .feed li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0;
@@ -211,38 +222,41 @@ _DASHBOARD_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="ticker"><div class="ticker-track" id="ticker"></div></div>
+
   <div class="explainer">
     Dados de mercado <b>reais</b>, execução sempre <b>simulada</b> — nenhuma ordem real sai daqui.
-    Cada bolha abaixo é um par monitorado agora; o tamanho mostra o quão grande é o spread e a cor mostra
-    se ele passaria nos critérios de risco. O gráfico mostra a evolução do spread líquido do par mais ativo,
-    com a linha tracejada marcando o mínimo exigido para aprovar.
+    No radar, cada ponto brilhante grande é um par monitorado agora (tamanho = magnitude do spread,
+    cor = passaria nos critérios de risco); a poeira de pontos menores é o histórico recente de avaliações.
+    O gráfico mostra o spread líquido do par mais ativo em velas, com a linha tracejada marcando o mínimo
+    exigido para aprovar.
   </div>
 
   <div class="stat-row" id="stats"></div>
 
+  <div class="panel" style="margin-bottom:16px">
+    <h2>Radar de oportunidades</h2>
+    <p class="hint">Pontos grandes e brilhantes = pares monitorados agora. Poeira de fundo = avaliações recentes de todos os pares.</p>
+    <div id="radar"></div>
+    <div id="radar-empty" hidden>Nenhum par avaliado ainda.</div>
+  </div>
+
   <div class="main-grid">
     <div class="panel">
       <h2>Spread líquido ao vivo — <span id="chart-pair-label">-</span></h2>
-      <p class="hint">Linha tracejada = spread mínimo para aprovar. Pontos verdes = aprovado.</p>
+      <p class="hint">Velas de spread líquido. Linha tracejada = mínimo para aprovar. Vela verde = teve aprovação na janela.</p>
       <div id="chart-wrap">
         <svg id="chart" width="100%" height="220" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
         <div id="chart-empty" hidden>Aguardando dados suficientes para desenhar o gráfico...</div>
       </div>
     </div>
     <div class="panel">
-      <h2>Oportunidades agora</h2>
-      <p class="hint">Um ponto por par monitorado, atualizado a cada poucos segundos.</p>
-      <div id="bubbles"></div>
-      <div id="bubbles-empty" hidden>Nenhum par avaliado ainda.</div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <h2>Últimas execuções simuladas</h2>
-    <p class="hint">Só aparece aqui quando um sinal é aprovado e a ordem simulada é registrada.</p>
-    <ul class="feed" id="feed"></ul>
-    <div id="feed-empty" hidden style="color: var(--muted); font-size: 12px; padding: 8px 0;">
-      Nenhuma execução ainda — normal enquanto nenhum sinal for aprovado.
+      <h2>Últimas execuções simuladas</h2>
+      <p class="hint">Só aparece aqui quando um sinal é aprovado e a ordem simulada é registrada.</p>
+      <ul class="feed" id="feed"></ul>
+      <div id="feed-empty" hidden style="color: var(--muted); font-size: 12px; padding: 8px 0;">
+        Nenhuma execução ainda — normal enquanto nenhum sinal for aprovado.
+      </div>
     </div>
   </div>
 
@@ -272,15 +286,56 @@ function updateClock() {
 setInterval(updateClock, 1000);
 updateClock();
 
+function pairKey(s) { return s.symbol + "|" + s.exchange_buy + "|" + s.exchange_sell; }
+
+function groupByPair(signals) {
+  const groups = {};
+  for (const s of signals) (groups[pairKey(s)] ||= []).push(s);
+  return groups;
+}
+
+// Longest run of consecutive positive-alpha ticks ending at the most
+// recent tick (chronological order in), across all monitored pairs —
+// a real "streak" computed from actual history, not a vanity counter.
+function bestStreak(signals) {
+  const groups = groupByPair(signals);
+  let best = 0;
+  for (const key in groups) {
+    const chrono = groups[key].slice().reverse(); // oldest -> newest
+    let streak = 0;
+    for (let i = chrono.length - 1; i >= 0; i--) {
+      if (chrono[i].net_alpha_bps > 0) streak++; else break;
+    }
+    best = Math.max(best, streak);
+  }
+  return best;
+}
+
+function renderTicker(signals) {
+  const groups = groupByPair(signals);
+  const latest = Object.values(groups).map(g => g[0]); // signals are newest-first
+  const track = document.getElementById("ticker");
+  if (!latest.length) { track.innerHTML = "<span class=\\"ticker-item\\">aguardando dados de mercado...</span>"; return; }
+  const itemsHtml = latest.map(s => {
+    const color = s.approved ? COLOR.green : (s.net_alpha_bps > 0 ? COLOR.amber : COLOR.red);
+    return `<span class="ticker-item"><span class="sym">${s.symbol}</span>
+      <span class="route">${s.exchange_buy}→${s.exchange_sell}</span>
+      <span style="color:${color}">${fmt(s.net_alpha_bps)} bps</span></span>`;
+  }).join("");
+  // Duplicated once so the CSS marquee loops seamlessly.
+  track.innerHTML = itemsHtml + itemsHtml;
+}
+
 function renderStats(status, signals, executions) {
   const totalPnl = executions.reduce((acc, e) => acc + (e.realized_pnl_usd || 0), 0);
   const approvedCount = signals.filter(s => s.approved).length;
   const approvalRate = signals.length ? (100 * approvedCount / signals.length) : 0;
   const best = signals.length ? signals.reduce((a, b) => (b.net_alpha_bps > a.net_alpha_bps ? b : a)) : null;
+  const streak = bestStreak(signals);
 
   document.getElementById("stats").innerHTML = `
     <div class="stat">
-      <div class="label">PnL simulado (últimas execuções)</div>
+      <div class="label">PnL simulado</div>
       <div class="value ${totalPnl >= 0 ? 'green' : 'red'}">${fmtUsd(totalPnl)}</div>
       <div class="sub">${executions.length} execução(ões) simulada(s)</div>
     </div>
@@ -288,6 +343,11 @@ function renderStats(status, signals, executions) {
       <div class="label">Melhor spread agora</div>
       <div class="value pink">${best ? fmt(best.net_alpha_bps) : '-'} bps</div>
       <div class="sub">${best ? best.symbol + ' (' + best.exchange_buy + '→' + best.exchange_sell + ')' : 'aguardando dados'}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Streak (spread positivo)</div>
+      <div class="value pink">${streak}</div>
+      <div class="sub">ticks seguidos com spread > 0, melhor par</div>
     </div>
     <div class="stat">
       <div class="label">Taxa de aprovação</div>
@@ -306,29 +366,46 @@ function renderStats(status, signals, executions) {
   document.getElementById("errors").textContent = status.errors.join("\\n");
 }
 
-function renderBubbles(signals) {
-  // Latest signal per pair key.
-  const latestByPair = {};
-  for (const s of signals) {
-    const key = s.symbol + "|" + s.exchange_buy + "|" + s.exchange_sell;
-    if (!latestByPair[key] || s.timestamp > latestByPair[key].timestamp) latestByPair[key] = s;
-  }
-  const pairs = Object.values(latestByPair);
-  const wrap = document.getElementById("bubbles");
-  document.getElementById("bubbles-empty").hidden = pairs.length > 0;
+function renderRadar(signals) {
+  const wrap = document.getElementById("radar");
+  document.getElementById("radar-empty").hidden = signals.length > 0;
   wrap.innerHTML = "";
-  if (!pairs.length) return;
+  if (!signals.length) return;
 
   const w = wrap.clientWidth || 400;
-  const h = 260;
+  const h = 240;
+  const now = Date.now() / 1000;
+
+  // Background "dust": every recent tick, small and fading with age —
+  // this is what gives the radar its density (matches the reference
+  // video's particle field) using real evaluation history, not decoration.
+  signals.forEach((s) => {
+    const age = now - s.timestamp;
+    const opacity = Math.max(0.06, 0.5 - age / 40);
+    const color = s.approved ? COLOR.green : (s.net_alpha_bps > 0 ? COLOR.amber : COLOR.red);
+    const x = hashJitter(s.id, w);
+    const y = hashJitter(s.id.split("").reverse().join(""), h);
+    const dot = document.createElement("div");
+    dot.className = "particle";
+    dot.style.width = dot.style.height = "5px";
+    dot.style.left = x + "px";
+    dot.style.top = y + "px";
+    dot.style.background = color;
+    dot.style.opacity = opacity;
+    wrap.appendChild(dot);
+  });
+
+  // Foreground: one bright, labeled bubble per currently-monitored pair.
+  const groups = groupByPair(signals);
+  const pairs = Object.values(groups).map(g => g[0]); // newest per pair
+  const cols = Math.max(1, Math.min(pairs.length, Math.floor(w / 130)));
   pairs.forEach((s, i) => {
-    const size = Math.max(46, Math.min(110, 46 + Math.abs(s.net_alpha_bps) * 1.8));
+    const size = Math.max(46, Math.min(100, 46 + Math.abs(s.net_alpha_bps) * 1.6));
     const color = s.approved ? COLOR.green : (s.net_alpha_bps > 0 ? COLOR.amber : COLOR.red);
     const glow = s.approved ? "rgba(63,230,160,0.5)" : (s.net_alpha_bps > 0 ? "rgba(255,201,63,0.4)" : "rgba(255,77,109,0.35)");
-    const cols = Math.max(1, Math.min(pairs.length, Math.floor(w / 120)));
     const col = i % cols, row = Math.floor(i / cols);
-    const x = (col + 0.5) * (w / cols) - size / 2 + hashJitter(s.symbol, 16) - 8;
-    const y = row * 120 + 20 + hashJitter(s.exchange_buy, 10);
+    const x = (col + 0.5) * (w / cols) - size / 2;
+    const y = row * 115 + 15;
     const el = document.createElement("div");
     el.className = "bubble";
     el.style.width = el.style.height = size + "px";
@@ -350,8 +427,8 @@ function renderChart(signals) {
     return;
   }
   // Focus on the pair with the most recent signal.
-  const focusKey = signals[0].symbol + "|" + signals[0].exchange_buy + "|" + signals[0].exchange_sell;
-  const focus = signals.filter(s => (s.symbol + "|" + s.exchange_buy + "|" + s.exchange_sell) === focusKey).slice(0, 60).reverse();
+  const focusKey = pairKey(signals[0]);
+  const focus = signals.filter(s => pairKey(s) === focusKey).slice(0, 120).reverse();
   document.getElementById("chart-pair-label").textContent = signals[0].symbol + " (" + signals[0].exchange_buy + "→" + signals[0].exchange_sell + ")";
 
   if (focus.length < 2) {
@@ -361,29 +438,43 @@ function renderChart(signals) {
   }
   document.getElementById("chart-empty").hidden = true;
 
+  // Bucket into ~20 candles of net_alpha_bps (OHLC over each bucket).
   const W = 600, H = 220, PAD = 10;
-  const values = focus.map(s => s.net_alpha_bps);
-  const minAlpha = config ? config.min_alpha_bps : 15.0;
-  const lo = Math.min(...values, minAlpha) - 2;
-  const hi = Math.max(...values, minAlpha) + 2;
-  const range = (hi - lo) || 1;
-  const xStep = (W - PAD * 2) / (focus.length - 1);
-  const yOf = v => H - PAD - ((v - lo) / range) * (H - PAD * 2);
+  const bucketSize = Math.max(1, Math.floor(focus.length / 20));
+  const candles = [];
+  for (let i = 0; i < focus.length; i += bucketSize) {
+    const chunk = focus.slice(i, i + bucketSize);
+    const vals = chunk.map(s => s.net_alpha_bps);
+    candles.push({
+      open: vals[0], close: vals[vals.length - 1],
+      high: Math.max(...vals), low: Math.min(...vals),
+      approved: chunk.some(s => s.approved),
+    });
+  }
 
-  const points = focus.map((s, i) => [PAD + i * xStep, yOf(s.net_alpha_bps)]);
-  const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const minAlpha = config ? config.min_alpha_bps : 15.0;
+  const allVals = candles.flatMap(c => [c.high, c.low]);
+  const lo = Math.min(...allVals, minAlpha) - 2;
+  const hi = Math.max(...allVals, minAlpha) + 2;
+  const range = (hi - lo) || 1;
+  const yOf = v => H - PAD - ((v - lo) / range) * (H - PAD * 2);
+  const slotW = (W - PAD * 2) / candles.length;
+  const bodyW = Math.max(2, slotW * 0.55);
   const thresholdY = yOf(minAlpha).toFixed(1);
 
-  const dots = focus.map((s, i) => {
-    const [x, y] = points[i];
-    const color = s.approved ? COLOR.green : COLOR.pinkDim;
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${s.approved ? 3.5 : 2}" fill="${color}" />`;
+  const candleSvg = candles.map((c, i) => {
+    const cx = PAD + (i + 0.5) * slotW;
+    const color = c.approved ? COLOR.green : (c.close >= c.open ? COLOR.cyan : COLOR.pinkDim);
+    const yHigh = yOf(c.high), yLow = yOf(c.low);
+    const yOpen = yOf(c.open), yClose = yOf(c.close);
+    const bodyTop = Math.min(yOpen, yClose), bodyH = Math.max(1, Math.abs(yClose - yOpen));
+    return `<line x1="${cx.toFixed(1)}" y1="${yHigh.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yLow.toFixed(1)}" stroke="${color}" stroke-width="1.5" />
+      <rect x="${(cx - bodyW / 2).toFixed(1)}" y="${bodyTop.toFixed(1)}" width="${bodyW.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${color}" />`;
   }).join("");
 
   document.getElementById("chart").innerHTML = `
     <line x1="0" y1="${thresholdY}" x2="${W}" y2="${thresholdY}" stroke="${COLOR.muted}" stroke-width="1" stroke-dasharray="4,4" />
-    <path d="${linePath}" fill="none" stroke="${COLOR.cyan}" stroke-width="2" />
-    ${dots}
+    ${candleSvg}
   `;
 }
 
@@ -402,11 +493,12 @@ async function refresh() {
   if (!config) config = await j("/api/config");
   const [status, signals, executions] = await Promise.all([
     j("/api/status"),
-    j("/api/signals?limit=100"),
+    j("/api/signals?limit=300"),
     j("/api/executions?limit=200"),
   ]);
+  renderTicker(signals);
   renderStats(status, signals, executions);
-  renderBubbles(signals);
+  renderRadar(signals);
   renderChart(signals);
   renderFeed(executions);
 }
