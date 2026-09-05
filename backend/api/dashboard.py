@@ -89,11 +89,17 @@ async def get_executions(limit: int = 50) -> list[dict]:
             "symbol": e.symbol,
             "buy_exchange": e.buy_exchange,
             "sell_exchange": e.sell_exchange,
-            "gross_spread_pct": e.gross_spread_pct,
-            "net_spread_pct": e.net_spread_pct,
-            "executed_volume_usd": e.executed_volume_usd,
-            "realized_pnl_usd": e.realized_pnl_usd,
-            "ml_confidence_score": e.ml_confidence_score,
+            # These columns are SQLAlchemy Numeric (stored as fixed-point
+            # strings so SQLite preserves precision), which come back as
+            # decimal.Decimal — and Pydantic/FastAPI serializes Decimal to a
+            # JSON *string*, not a number. Cast explicitly so the dashboard
+            # (and any other consumer) gets real JSON numbers to do
+            # arithmetic on, not strings that only look like numbers.
+            "gross_spread_pct": float(e.gross_spread_pct),
+            "net_spread_pct": float(e.net_spread_pct),
+            "executed_volume_usd": float(e.executed_volume_usd),
+            "realized_pnl_usd": float(e.realized_pnl_usd),
+            "ml_confidence_score": float(e.ml_confidence_score),
             "execution_status": e.execution_status,
             "executed_at": e.executed_at.isoformat() if e.executed_at else None,
         }
@@ -117,152 +123,292 @@ _DASHBOARD_HTML = """<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<title>Arbitragem Bimodal — Paper Trading Local</title>
+<title>Arbitragem Bimodal — Live</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px;
-         background: #0b0f14; color: #dbe2ea; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .subtitle { color: #7f8b99; font-size: 13px; margin-bottom: 6px; }
-  .explainer { background: #131a22; border: 1px solid #212b36; border-radius: 8px; padding: 12px 16px;
-               font-size: 13px; color: #a9b4c0; line-height: 1.5; margin: 14px 0 24px; }
-  .explainer b { color: #dbe2ea; }
-  .cards { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-  .card { background: #131a22; border: 1px solid #212b36; border-radius: 8px; padding: 14px 18px; min-width: 160px; }
-  .card .label { font-size: 11px; color: #7f8b99; text-transform: uppercase; letter-spacing: .04em; }
-  .card .value { font-size: 22px; margin-top: 4px; }
-  .card .sub { font-size: 11px; color: #7f8b99; margin-top: 2px; }
-  .ok { color: #3fd68c; } .bad { color: #ff5c5c; } .warn { color: #ffb84d; } .muted { color: #7f8b99; }
-  .thresholds { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; font-size: 12px; color: #a9b4c0; }
-  .thresholds .item { background: #101720; border: 1px solid #1b232c; border-radius: 6px; padding: 6px 12px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 28px; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1b232c; white-space: nowrap; }
-  th { color: #7f8b99; font-weight: 500; font-size: 11px; text-transform: uppercase; cursor: help; }
-  tr:hover { background: #101720; }
-  tr.approved-row { background: rgba(63, 214, 140, 0.06); }
-  .approved { color: #3fd68c; font-weight: 600; } .rejected { color: #7f8b99; }
-  button { background: #1b232c; color: #dbe2ea; border: 1px solid #2c3a48; border-radius: 6px;
-           padding: 6px 14px; cursor: pointer; font-size: 13px; }
-  button:hover { background: #24303c; }
-  button.danger { border-color: #6b2530; color: #ff8080; }
-  section h2 { font-size: 14px; color: #a9b4c0; margin: 0 0 4px; }
-  section .hint { font-size: 12px; color: #7f8b99; margin: 0 0 8px; }
-  .empty-hint { color: #7f8b99; font-size: 12px; padding: 12px 0; }
-  .errors { color: #ff8080; font-size: 12px; white-space: pre-wrap; }
+  :root {
+    --bg: #07040c; --panel: #120a1c; --panel-border: #3a1f4f;
+    --pink: #ff2ea6; --pink-dim: #a2286f; --cyan: #38f2d0; --green: #3fe6a0;
+    --red: #ff4d6d; --amber: #ffc93f; --text: #f2e9ff; --muted: #9a86b3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px;
+    background: radial-gradient(ellipse at top, #1a0d2b 0%, var(--bg) 60%);
+    color: var(--text); min-height: 100vh;
+  }
+  .topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 8px; }
+  .topbar h1 { font-size: 17px; margin: 0; letter-spacing: .03em; }
+  .topbar h1 .accent { color: var(--pink); text-shadow: 0 0 12px var(--pink-dim); }
+  .topbar .right { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--muted); }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+  .pill.live { background: rgba(63,230,160,0.12); color: var(--green); border: 1px solid rgba(63,230,160,0.4); }
+  .pill.halted { background: rgba(255,77,109,0.12); color: var(--red); border: 1px solid rgba(255,77,109,0.4); }
+  .explainer { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+               padding: 12px 16px; font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-bottom: 18px; }
+  .explainer b { color: var(--text); }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .stat {
+    background: linear-gradient(180deg, var(--panel), #0d0716);
+    border: 1px solid var(--panel-border); border-radius: 12px; padding: 16px 18px;
+    box-shadow: 0 0 0 1px rgba(255,46,166,0.03) inset;
+  }
+  .stat .label { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .stat .value { font-size: 30px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .stat .value.pink { color: var(--pink); text-shadow: 0 0 18px rgba(255,46,166,0.45); }
+  .stat .value.green { color: var(--green); text-shadow: 0 0 18px rgba(63,230,160,0.4); }
+  .stat .value.red { color: var(--red); text-shadow: 0 0 18px rgba(255,77,109,0.4); }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  .main-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 16px 18px; }
+  .panel h2 { font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 10px; font-weight: 600; }
+  .panel .hint { font-size: 11.5px; color: var(--muted); margin: -4px 0 10px; }
+
+  #chart-wrap { position: relative; }
+  #chart-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 0; }
+
+  #bubbles { position: relative; height: 260px; }
+  .bubble {
+    position: absolute; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; text-align: center; transition: all 0.6s ease; cursor: default;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .bubble .pair { font-size: 10px; font-weight: 700; }
+  .bubble .val { font-size: 11px; opacity: .85; }
+  #bubbles-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 100px 0 0; }
+
+  .feed { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+  .feed li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0;
+             border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12.5px; }
+  .feed li:last-child { border-bottom: none; }
+  .feed .route { color: var(--text); }
+  .feed .time { color: var(--muted); font-size: 11px; }
+  .feed .pnl.green { color: var(--green); font-weight: 600; }
+  .feed .pnl.red { color: var(--red); font-weight: 600; }
+
+  .controls { display: flex; gap: 8px; align-items: center; }
+  button { background: #1b0f2b; color: var(--text); border: 1px solid var(--panel-border); border-radius: 8px;
+           padding: 6px 14px; cursor: pointer; font-size: 12.5px; }
+  button:hover { background: #241340; }
+  button.danger { border-color: rgba(255,77,109,0.5); color: var(--red); }
+  button.danger:hover { background: rgba(255,77,109,0.08); }
+
+  .errors { color: var(--red); font-size: 12px; white-space: pre-wrap; margin-top: 12px; }
 </style>
 </head>
 <body>
-  <h1>Arbitragem Bimodal — Paper Trading Local</h1>
-  <div class="subtitle">Dados reais de mercado, execução simulada. Nenhuma ordem real é enviada por esta tela.</div>
-  <div class="explainer">
-    Este painel mostra, em tempo real, o que o sistema está decidindo com dados de mercado
-    <b>reais</b> — mas toda execução é <b>simulada</b> (papel), sem risco financeiro.
-    Cada linha da tabela de sinais é uma avaliação: o sistema calcula o spread líquido real entre
-    as duas exchanges e decide se valeria a pena executar, comparando com os limites de risco
-    configurados. Só é <b>aprovado</b> (e só então simulado) quando passa nos três critérios ao mesmo tempo.
+  <div class="topbar">
+    <h1>Arbitragem <span class="accent">Bimodal</span> — Live</h1>
+    <div class="right">
+      <span id="clock"></span>
+      <span class="pill" id="mode-pill">paper-trading</span>
+      <div class="controls">
+        <button id="engage" class="danger">Parar</button>
+        <button id="disengage">Retomar</button>
+      </div>
+    </div>
   </div>
 
-  <div class="cards" id="cards"></div>
-  <div class="thresholds" id="thresholds"></div>
+  <div class="explainer">
+    Dados de mercado <b>reais</b>, execução sempre <b>simulada</b> — nenhuma ordem real sai daqui.
+    Cada bolha abaixo é um par monitorado agora; o tamanho mostra o quão grande é o spread e a cor mostra
+    se ele passaria nos critérios de risco. O gráfico mostra a evolução do spread líquido do par mais ativo,
+    com a linha tracejada marcando o mínimo exigido para aprovar.
+  </div>
 
-  <section>
-    <h2>Interruptor de emergência (kill switch)</h2>
-    <p class="hint">Engatar interrompe imediatamente qualquer nova execução simulada, sem parar o serviço.</p>
-    <button id="engage" class="danger">Engatar (parar trading)</button>
-    <button id="disengage">Desengatar</button>
-  </section>
+  <div class="stat-row" id="stats"></div>
 
-  <section>
-    <h2>Sinais (avaliações ao vivo)</h2>
-    <p class="hint">Cada linha é uma checagem real feita nos últimos segundos. Verde = passou nesse critério; vermelho = foi o motivo da reprovação.</p>
-    <table id="signals"><thead><tr>
-      <th title="Horário da avaliação">Hora</th>
-      <th title="Par de moedas monitorado">Par</th>
-      <th title="Compra na primeira exchange, venda na segunda">Rota</th>
-      <th title="Spread líquido estimado, já descontando taxas — precisa ser maior que o mínimo configurado">Spread líq. (bps)</th>
-      <th title="Probabilidade de a oportunidade ainda existir quando a ordem chegar à exchange (persistência real, não aleatória)">P(execução)</th>
-      <th title="Risco de o preço virar contra a posição antes de conseguir proteger (hedge) — calculado pela volatilidade real recente">Risco (hazard)</th>
-      <th title="Aprovado = passou nos 3 critérios acima ao mesmo tempo">Aprovado?</th>
-      <th title="Detalhe técnico do motivo da reprovação">Motivo</th>
-      <th title="Resultado da execução simulada, se aprovado">Execução</th>
-      <th title="Lucro/prejuízo simulado em USD">PnL</th>
-    </tr></thead><tbody></tbody></table>
-    <div class="empty-hint" id="signals-empty" hidden>
-      Nenhum sinal ainda — aguardando dados suficientes das duas exchanges para começar a avaliar
-      (a primeira avaliação leva um tempo, até o histórico de preços encher a janela necessária).
+  <div class="main-grid">
+    <div class="panel">
+      <h2>Spread líquido ao vivo — <span id="chart-pair-label">-</span></h2>
+      <p class="hint">Linha tracejada = spread mínimo para aprovar. Pontos verdes = aprovado.</p>
+      <div id="chart-wrap">
+        <svg id="chart" width="100%" height="220" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+        <div id="chart-empty" hidden>Aguardando dados suficientes para desenhar o gráfico...</div>
+      </div>
     </div>
-  </section>
-
-  <section>
-    <h2>Execuções simuladas (persistidas)</h2>
-    <p class="hint">Só aparece aqui quando um sinal é aprovado — cada linha é uma ordem simulada de verdade, salva no banco local.</p>
-    <table id="executions"><thead><tr>
-      <th>Hora</th><th>Símbolo</th><th>Rota</th><th>Notional (USD)</th><th>Spread líq. %</th>
-      <th>PnL</th><th>Status</th>
-    </tr></thead><tbody></tbody></table>
-    <div class="empty-hint" id="executions-empty" hidden>
-      Nenhuma execução ainda — normal enquanto nenhum sinal for aprovado (veja a tabela de sinais acima).
+    <div class="panel">
+      <h2>Oportunidades agora</h2>
+      <p class="hint">Um ponto por par monitorado, atualizado a cada poucos segundos.</p>
+      <div id="bubbles"></div>
+      <div id="bubbles-empty" hidden>Nenhum par avaliado ainda.</div>
     </div>
-  </section>
+  </div>
+
+  <div class="panel">
+    <h2>Últimas execuções simuladas</h2>
+    <p class="hint">Só aparece aqui quando um sinal é aprovado e a ordem simulada é registrada.</p>
+    <ul class="feed" id="feed"></ul>
+    <div id="feed-empty" hidden style="color: var(--muted); font-size: 12px; padding: 8px 0;">
+      Nenhuma execução ainda — normal enquanto nenhum sinal for aprovado.
+    </div>
+  </div>
 
   <div class="errors" id="errors"></div>
 
 <script>
 async function j(url, opts) { const r = await fetch(url, opts); return r.json(); }
 function fmt(n, d) { return (n === null || n === undefined) ? "-" : Number(n).toFixed(d ?? 2); }
+function fmtUsd(n) { return (n === null || n === undefined) ? "-" : (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2); }
 function fmtTime(t) { return new Date(t * 1000).toLocaleTimeString("pt-BR"); }
-function passClass(pass) { return pass ? "ok" : "bad"; }
+function hashJitter(s, range) {
+  let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return ((h % 1000) / 1000) * range;
+}
+
+// Literal hex mirrors of the CSS custom properties in :root — needed
+// wherever JS builds a color string dynamically (e.g. appending an alpha
+// suffix like `${color}33`), since `var(--x)` is not valid inside such a
+// concatenated value the way it is in a plain CSS declaration.
+const COLOR = { green: "#3fe6a0", amber: "#ffc93f", red: "#ff4d6d", cyan: "#38f2d0", pinkDim: "#a2286f", muted: "#9a86b3" };
 
 let config = null;
 
-async function refresh() {
-  if (!config) config = await j("/api/config");
+function updateClock() {
+  document.getElementById("clock").textContent = new Date().toLocaleTimeString("pt-BR");
+}
+setInterval(updateClock, 1000);
+updateClock();
 
-  const status = await j("/api/status");
-  document.getElementById("cards").innerHTML = `
-    <div class="card"><div class="label">Kill switch</div>
-      <div class="value ${status.kill_switch_engaged ? 'bad' : 'ok'}">${status.kill_switch_engaged ? 'ENGATADO' : 'desligado'}</div></div>
-    <div class="card"><div class="label">Tempo ativo</div><div class="value">${Math.floor(status.uptime_s)}s</div></div>
-    <div class="card"><div class="label">Pares monitorados</div><div class="value">${status.monitored_pairs.join(', ') || '-'}</div>
-      <div class="sub">dados reais de mercado</div></div>
-    <div class="card"><div class="label">Modo</div><div class="value" style="font-size:13px">paper-trading</div>
-      <div class="sub">execução sempre simulada</div></div>
+function renderStats(status, signals, executions) {
+  const totalPnl = executions.reduce((acc, e) => acc + (e.realized_pnl_usd || 0), 0);
+  const approvedCount = signals.filter(s => s.approved).length;
+  const approvalRate = signals.length ? (100 * approvedCount / signals.length) : 0;
+  const best = signals.length ? signals.reduce((a, b) => (b.net_alpha_bps > a.net_alpha_bps ? b : a)) : null;
+
+  document.getElementById("stats").innerHTML = `
+    <div class="stat">
+      <div class="label">PnL simulado (últimas execuções)</div>
+      <div class="value ${totalPnl >= 0 ? 'green' : 'red'}">${fmtUsd(totalPnl)}</div>
+      <div class="sub">${executions.length} execução(ões) simulada(s)</div>
+    </div>
+    <div class="stat">
+      <div class="label">Melhor spread agora</div>
+      <div class="value pink">${best ? fmt(best.net_alpha_bps) : '-'} bps</div>
+      <div class="sub">${best ? best.symbol + ' (' + best.exchange_buy + '→' + best.exchange_sell + ')' : 'aguardando dados'}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Taxa de aprovação</div>
+      <div class="value">${fmt(approvalRate, 1)}%</div>
+      <div class="sub">${approvedCount} de ${signals.length} avaliações</div>
+    </div>
+    <div class="stat">
+      <div class="label">Tempo ativo</div>
+      <div class="value" style="font-size:22px">${Math.floor(status.uptime_s)}s</div>
+      <div class="sub">${status.monitored_pairs.length} par(es) monitorado(s)</div>
+    </div>
   `;
-  document.getElementById("thresholds").innerHTML = `
-    <div class="item">Spread líq. mínimo: <b>${fmt(config.min_alpha_bps)} bps</b></div>
-    <div class="item">P(execução) mínima: <b>${fmt(config.min_execution_probability, 2)}</b></div>
-    <div class="item">Risco máximo: <b>${fmt(config.max_adverse_hazard, 2)}</b></div>
-    <div class="item">Notional máx/trade: <b>US$ ${fmt(config.max_notional_usd_per_trade)}</b></div>
-  `;
+
+  document.getElementById("mode-pill").className = "pill " + (status.kill_switch_engaged ? "halted" : "live");
+  document.getElementById("mode-pill").textContent = status.kill_switch_engaged ? "PARADO" : "AO VIVO";
   document.getElementById("errors").textContent = status.errors.join("\\n");
+}
 
-  const signals = await j("/api/signals?limit=100");
-  document.getElementById("signals-empty").hidden = signals.length > 0;
-  document.querySelector("#signals tbody").innerHTML = signals.map(s => {
-    const alphaOk = s.net_alpha_bps > config.min_alpha_bps;
-    const probOk = s.execution_probability > config.min_execution_probability;
-    const hazardOk = s.adverse_hazard < config.max_adverse_hazard;
-    return `
-    <tr class="${s.approved ? 'approved-row' : ''}">
-      <td>${fmtTime(s.timestamp)}</td><td>${s.symbol}</td>
-      <td>${s.exchange_buy}→${s.exchange_sell}</td>
-      <td class="${passClass(alphaOk)}">${fmt(s.net_alpha_bps)}</td>
-      <td class="${passClass(probOk)}">${fmt(s.execution_probability, 3)}</td>
-      <td class="${passClass(hazardOk)}">${fmt(s.adverse_hazard, 3)}</td>
-      <td class="${s.approved ? 'approved' : 'rejected'}">${s.approved ? 'SIM' : 'não'}</td>
-      <td class="muted">${s.reason || ''}</td><td>${s.execution_status || '-'}</td>
-      <td>${fmt(s.realized_pnl_usd)}</td>
-    </tr>`;
+function renderBubbles(signals) {
+  // Latest signal per pair key.
+  const latestByPair = {};
+  for (const s of signals) {
+    const key = s.symbol + "|" + s.exchange_buy + "|" + s.exchange_sell;
+    if (!latestByPair[key] || s.timestamp > latestByPair[key].timestamp) latestByPair[key] = s;
+  }
+  const pairs = Object.values(latestByPair);
+  const wrap = document.getElementById("bubbles");
+  document.getElementById("bubbles-empty").hidden = pairs.length > 0;
+  wrap.innerHTML = "";
+  if (!pairs.length) return;
+
+  const w = wrap.clientWidth || 400;
+  const h = 260;
+  pairs.forEach((s, i) => {
+    const size = Math.max(46, Math.min(110, 46 + Math.abs(s.net_alpha_bps) * 1.8));
+    const color = s.approved ? COLOR.green : (s.net_alpha_bps > 0 ? COLOR.amber : COLOR.red);
+    const glow = s.approved ? "rgba(63,230,160,0.5)" : (s.net_alpha_bps > 0 ? "rgba(255,201,63,0.4)" : "rgba(255,77,109,0.35)");
+    const cols = Math.max(1, Math.min(pairs.length, Math.floor(w / 120)));
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = (col + 0.5) * (w / cols) - size / 2 + hashJitter(s.symbol, 16) - 8;
+    const y = row * 120 + 20 + hashJitter(s.exchange_buy, 10);
+    const el = document.createElement("div");
+    el.className = "bubble";
+    el.style.width = el.style.height = size + "px";
+    el.style.left = Math.max(0, x) + "px";
+    el.style.top = y + "px";
+    el.style.background = `radial-gradient(circle at 35% 30%, ${color}33, ${color}11)`;
+    el.style.boxShadow = `0 0 ${size * 0.4}px ${glow}`;
+    el.style.color = color;
+    el.title = `${s.symbol} ${s.exchange_buy}→${s.exchange_sell}: ${fmt(s.net_alpha_bps)} bps — ${s.approved ? 'aprovado' : (s.reason || 'reprovado')}`;
+    el.innerHTML = `<div class="pair">${s.symbol}</div><div class="val">${fmt(s.net_alpha_bps, 1)}</div>`;
+    wrap.appendChild(el);
+  });
+}
+
+function renderChart(signals) {
+  if (!signals.length) {
+    document.getElementById("chart-empty").hidden = false;
+    document.getElementById("chart").innerHTML = "";
+    return;
+  }
+  // Focus on the pair with the most recent signal.
+  const focusKey = signals[0].symbol + "|" + signals[0].exchange_buy + "|" + signals[0].exchange_sell;
+  const focus = signals.filter(s => (s.symbol + "|" + s.exchange_buy + "|" + s.exchange_sell) === focusKey).slice(0, 60).reverse();
+  document.getElementById("chart-pair-label").textContent = signals[0].symbol + " (" + signals[0].exchange_buy + "→" + signals[0].exchange_sell + ")";
+
+  if (focus.length < 2) {
+    document.getElementById("chart-empty").hidden = false;
+    document.getElementById("chart").innerHTML = "";
+    return;
+  }
+  document.getElementById("chart-empty").hidden = true;
+
+  const W = 600, H = 220, PAD = 10;
+  const values = focus.map(s => s.net_alpha_bps);
+  const minAlpha = config ? config.min_alpha_bps : 15.0;
+  const lo = Math.min(...values, minAlpha) - 2;
+  const hi = Math.max(...values, minAlpha) + 2;
+  const range = (hi - lo) || 1;
+  const xStep = (W - PAD * 2) / (focus.length - 1);
+  const yOf = v => H - PAD - ((v - lo) / range) * (H - PAD * 2);
+
+  const points = focus.map((s, i) => [PAD + i * xStep, yOf(s.net_alpha_bps)]);
+  const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const thresholdY = yOf(minAlpha).toFixed(1);
+
+  const dots = focus.map((s, i) => {
+    const [x, y] = points[i];
+    const color = s.approved ? COLOR.green : COLOR.pinkDim;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${s.approved ? 3.5 : 2}" fill="${color}" />`;
   }).join("");
 
-  const executions = await j("/api/executions?limit=50");
-  document.getElementById("executions-empty").hidden = executions.length > 0;
-  document.querySelector("#executions tbody").innerHTML = executions.map(e => `
-    <tr>
-      <td>${e.executed_at || ''}</td><td>${e.symbol}</td>
-      <td>${e.buy_exchange}→${e.sell_exchange}</td>
-      <td>${fmt(e.executed_volume_usd)}</td><td>${fmt(e.net_spread_pct * 100, 3)}</td>
-      <td>${fmt(e.realized_pnl_usd)}</td><td>${e.execution_status}</td>
-    </tr>`).join("");
+  document.getElementById("chart").innerHTML = `
+    <line x1="0" y1="${thresholdY}" x2="${W}" y2="${thresholdY}" stroke="${COLOR.muted}" stroke-width="1" stroke-dasharray="4,4" />
+    <path d="${linePath}" fill="none" stroke="${COLOR.cyan}" stroke-width="2" />
+    ${dots}
+  `;
+}
+
+function renderFeed(executions) {
+  const list = executions.slice(0, 10);
+  document.getElementById("feed-empty").hidden = list.length > 0;
+  document.getElementById("feed").innerHTML = list.map(e => `
+    <li>
+      <span><span class="route">${e.symbol} ${e.buy_exchange}→${e.sell_exchange}</span>
+        <span class="time"> · ${e.executed_at ? new Date(e.executed_at).toLocaleTimeString('pt-BR') : ''} · ${e.execution_status}</span></span>
+      <span class="pnl ${(e.realized_pnl_usd || 0) >= 0 ? 'green' : 'red'}">${fmtUsd(e.realized_pnl_usd)}</span>
+    </li>`).join("");
+}
+
+async function refresh() {
+  if (!config) config = await j("/api/config");
+  const [status, signals, executions] = await Promise.all([
+    j("/api/status"),
+    j("/api/signals?limit=100"),
+    j("/api/executions?limit=200"),
+  ]);
+  renderStats(status, signals, executions);
+  renderBubbles(signals);
+  renderChart(signals);
+  renderFeed(executions);
 }
 
 document.getElementById("engage").onclick = async () => { await j("/api/kill-switch/engage", {method: "POST"}); refresh(); };
