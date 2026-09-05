@@ -267,6 +267,10 @@ async function j(url, opts) { const r = await fetch(url, opts); return r.json();
 function fmt(n, d) { return (n === null || n === undefined) ? "-" : Number(n).toFixed(d ?? 2); }
 function fmtUsd(n) { return (n === null || n === undefined) ? "-" : (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2); }
 function fmtTime(t) { return new Date(t * 1000).toLocaleTimeString("pt-BR"); }
+// Triangular-arbitrage signals/executions have exchange_buy === exchange_sell
+// (all three legs are on one exchange) — show just that one exchange name
+// instead of a confusing "binance→binance".
+function routeLabel(buyEx, sellEx) { return buyEx === sellEx ? buyEx : `${buyEx}→${sellEx}`; }
 function hashJitter(s, range) {
   let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return ((h % 1000) / 1000) * range;
@@ -319,7 +323,7 @@ function renderTicker(signals) {
   const itemsHtml = latest.map(s => {
     const color = s.approved ? COLOR.green : (s.net_alpha_bps > 0 ? COLOR.amber : COLOR.red);
     return `<span class="ticker-item"><span class="sym">${s.symbol}</span>
-      <span class="route">${s.exchange_buy}→${s.exchange_sell}</span>
+      <span class="route">${routeLabel(s.exchange_buy, s.exchange_sell)}</span>
       <span style="color:${color}">${fmt(s.net_alpha_bps)} bps</span></span>`;
   }).join("");
   // Duplicated once so the CSS marquee loops seamlessly.
@@ -414,7 +418,7 @@ function renderRadar(signals) {
     el.style.background = `radial-gradient(circle at 35% 30%, ${color}33, ${color}11)`;
     el.style.boxShadow = `0 0 ${size * 0.4}px ${glow}`;
     el.style.color = color;
-    el.title = `${s.symbol} ${s.exchange_buy}→${s.exchange_sell}: ${fmt(s.net_alpha_bps)} bps — ${s.approved ? 'aprovado' : (s.reason || 'reprovado')}`;
+    el.title = `${s.symbol} ${routeLabel(s.exchange_buy, s.exchange_sell)}: ${fmt(s.net_alpha_bps)} bps — ${s.approved ? 'aprovado' : (s.reason || 'reprovado')}`;
     el.innerHTML = `<div class="pair">${s.symbol}</div><div class="val">${fmt(s.net_alpha_bps, 1)}</div>`;
     wrap.appendChild(el);
   });
@@ -429,7 +433,7 @@ function renderChart(signals) {
   // Focus on the pair with the most recent signal.
   const focusKey = pairKey(signals[0]);
   const focus = signals.filter(s => pairKey(s) === focusKey).slice(0, 120).reverse();
-  document.getElementById("chart-pair-label").textContent = signals[0].symbol + " (" + signals[0].exchange_buy + "→" + signals[0].exchange_sell + ")";
+  document.getElementById("chart-pair-label").textContent = signals[0].symbol + " (" + routeLabel(signals[0].exchange_buy, signals[0].exchange_sell) + ")";
 
   if (focus.length < 2) {
     document.getElementById("chart-empty").hidden = false;
@@ -483,7 +487,7 @@ function renderFeed(executions) {
   document.getElementById("feed-empty").hidden = list.length > 0;
   document.getElementById("feed").innerHTML = list.map(e => `
     <li>
-      <span><span class="route">${e.symbol} ${e.buy_exchange}→${e.sell_exchange}</span>
+      <span><span class="route">${e.symbol} ${routeLabel(e.buy_exchange, e.sell_exchange)}</span>
         <span class="time"> · ${e.executed_at ? new Date(e.executed_at).toLocaleTimeString('pt-BR') : ''} · ${e.execution_status}</span></span>
       <span class="pnl ${(e.realized_pnl_usd || 0) >= 0 ? 'green' : 'red'}">${fmtUsd(e.realized_pnl_usd)}</span>
     </li>`).join("");

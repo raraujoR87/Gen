@@ -116,6 +116,26 @@ out of the box but is materially higher latency; install `ccxt.pro`
 yourself and it will be used automatically if present
 (`backend/marketdata/ws_ingestion.get_default_feed`).
 
+### Triangular arbitrage (`MONITORED_TRIANGLES`)
+
+`MONITORED_PAIRS` is cross-exchange arbitrage — real, but it's competing
+against colocated HFT infrastructure with materially lower latency than
+this (or any) retail setup can reach. `MONITORED_TRIANGLES` is a
+different, more realistic technique: three legs on **one** exchange
+(quote -> bridge -> target -> quote, e.g. `USDT -> BTC -> ETH -> USDT`),
+with no cross-exchange transfer or latency race — see
+`backend/execution/triangular.py`.
+
+```
+MONITORED_TRIANGLES=USDT:BTC:ETH:binance,USDT:BTC:SOL:binance,USDT:ETH:SOL:binance
+```
+
+Each entry is `QUOTE:BRIDGE:TARGET:exchange`. All three legs are fired
+concurrently once a triangle is approved (not sequentially — waiting for
+leg 1's fill before placing leg 2 reintroduces the exact latency exposure
+this technique exists to avoid), same paper-trading guarantee as
+`MONITORED_PAIRS`: never a real order.
+
 ## 3. Install dependencies and create the database
 
 Use `requirements-local.txt`, not `requirements.txt`, for this mode:

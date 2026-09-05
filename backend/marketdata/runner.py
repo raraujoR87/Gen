@@ -26,6 +26,14 @@ liquidity signal from the buy-side DepthMatrix
 model. Every evaluated tick is also logged
 (backend.marketdata.sample_logger) so a real, non-fabricated training set
 accumulates for when there's enough of it to actually train the model.
+
+Also runs TriangleMonitor instances (backend.execution.triangular) for
+single-exchange triangular arbitrage (quote -> bridge -> target -> quote)
+— no cross-exchange transfer/latency risk, unlike PairMonitor's two-leg
+case. Both share the exchange-connection caching in
+backend.marketdata.ws_ingestion, so a triangle's three legs (all on one
+exchange) cost three concurrent watch_order_book() subscriptions over one
+shared connection, not three separate connections.
 """
 from __future__ import annotations
 
@@ -40,10 +48,11 @@ from backend.config import (
 )
 from backend.db.repository import get_or_create_user_by_email, record_execution
 from backend.db.session import AsyncSessionLocal
-from backend.execution.alpha import compute_net_alpha
+from backend.execution.alpha import compute_net_alpha, compute_triangular_net_alpha
 from backend.execution.broken_leg import BrokenLegMitigator
 from backend.execution.decision import should_execute
 from backend.execution.paper_exchange import PaperExchangeClient
+from backend.execution.triangular import TriangleConfig, TriangularMitigator
 from backend.marketdata.features import DepthMatrixBuilder, TemporalFeatureWindow
 from backend.marketdata.microstructure import compute_vwap
 from backend.marketdata.orderbook_cache import OrderBookCache
@@ -225,6 +234,156 @@ class PairMonitor:
             await record_execution(session, result, self._user_id)
 
 
+class TriangleMonitor:
+    """Runs one triangular-arbitrage cycle (quote -> bridge -> target ->
+    quote, all on one exchange) end to end.
+
+    Event-driven exactly like PairMonitor: re-evaluates whenever ANY of the
+    triangle's three legs gets a fresh order-book update, using whatever
+    the freshest cached snapshot of the other two legs happens to be —
+    never on a fixed timer. Uses the same HeuristicSignalEstimator and risk
+    gate (backend.execution.decision.should_execute) as PairMonitor; the
+    only real differences are the alpha formula (single exchange, three
+    legs — backend.execution.alpha.compute_triangular_net_alpha) and the
+    execution path (backend.execution.triangular.TriangularMitigator fires
+    all three legs concurrently, instead of BrokenLegMitigator's two).
+    """
+
+    def __init__(
+        self,
+        triangle: TriangleConfig,
+        cache: OrderBookCache,
+        config: RunnerConfig,
+        user_id,
+    ) -> None:
+        self.triangle = triangle
+        self._cache = cache
+        self._config = config
+        self._user_id = user_id
+        self._heuristic = HeuristicSignalEstimator()
+        self._client = PaperExchangeClient(cache)
+        self._mitigator = TriangularMitigator(self._client)
+        self._daily_notional_used_usd = 0.0
+        self._evaluating = asyncio.Lock()
+        self._prev_target_quote_mid: float | None = None
+
+    async def run(self) -> None:
+        feeds = [get_default_feed(self.triangle.exchange, symbol) for symbol in self.triangle.symbols]
+        try:
+            await asyncio.gather(*(feed.run(callback=self._on_snapshot) for feed in feeds))
+        except Exception as exc:
+            STATE.record_error(f"{self.triangle.label} monitor crashed: {exc!r}")
+            logger.exception("TriangleMonitor for %s crashed", self.triangle.label)
+            raise
+
+    async def _on_snapshot(self, snapshot: OrderBookSnapshot) -> None:
+        await self._cache.set_snapshot(snapshot)
+        await self._maybe_evaluate()
+
+    async def _maybe_evaluate(self) -> None:
+        if self._evaluating.locked():
+            return  # a previous evaluation is still in flight; skip this tick
+        async with self._evaluating:
+            await self._evaluate_once()
+
+    async def _evaluate_once(self) -> None:
+        bridge_quote = await self._cache.get_snapshot(self.triangle.exchange, self.triangle.symbol_bridge_quote)
+        target_bridge = await self._cache.get_snapshot(self.triangle.exchange, self.triangle.symbol_target_bridge)
+        target_quote = await self._cache.get_snapshot(self.triangle.exchange, self.triangle.symbol_target_quote)
+        if bridge_quote is None or target_bridge is None or target_quote is None:
+            return
+        if not bridge_quote.asks or not target_bridge.asks or not target_quote.bids or not target_quote.asks:
+            return
+
+        notional = self._config.notional_per_trade_usd
+
+        # Two-step VWAP estimate per leg (estimate quantity from the best
+        # price, then re-derive the VWAP for that quantity) — the same
+        # approximation PairMonitor already uses for its two legs. Each
+        # VWAP is computed exactly once here and reused for both the
+        # risk-gate check below and, if approved, dispatch — no redundant
+        # book-walking.
+        try:
+            best_bridge_quote_ask = bridge_quote.asks[0].price
+            bridge_qty_est = notional / best_bridge_quote_ask
+            vwap_bridge_quote = compute_vwap(bridge_quote.asks, bridge_qty_est)
+
+            bridge_qty_rough = notional / vwap_bridge_quote
+            best_target_bridge_ask = target_bridge.asks[0].price
+            target_qty_est = bridge_qty_rough / best_target_bridge_ask
+            vwap_target_bridge = compute_vwap(target_bridge.asks, target_qty_est)
+
+            target_qty_rough = bridge_qty_rough / vwap_target_bridge
+            vwap_target_quote = compute_vwap(target_quote.bids, target_qty_rough)
+        except ValueError:
+            # Not enough resting depth on one leg to fill this notional.
+            return
+
+        tau = get_taker_fee_bps(self.triangle.exchange, self._config.default_taker_fee_bps) / 10_000
+        try:
+            alpha = compute_triangular_net_alpha(
+                quote_notional=notional,
+                vwap_bridge_quote=vwap_bridge_quote,
+                vwap_target_bridge=vwap_target_bridge,
+                vwap_target_quote=vwap_target_quote,
+                tau=tau,
+            )
+        except ValueError:
+            return
+        net_alpha_bps = alpha.net_alpha * 1e4
+
+        mid = (target_quote.bids[0].price + target_quote.asks[0].price) / 2
+        mid_price_return = 0.0
+        if self._prev_target_quote_mid is not None and self._prev_target_quote_mid > 0:
+            mid_price_return = (mid - self._prev_target_quote_mid) / self._prev_target_quote_mid
+        self._prev_target_quote_mid = mid
+
+        signal = self._heuristic.update(net_alpha_bps=net_alpha_bps, mid_price_return=mid_price_return)
+
+        limits = STATE.kill_switch.apply(RiskLimits())
+        approved, reason = should_execute(
+            net_alpha_bps=net_alpha_bps,
+            signal=signal,
+            limits=limits,
+            trade_notional_usd=notional,
+            daily_notional_used_usd=self._daily_notional_used_usd,
+        )
+
+        record = STATE.record_signal(
+            symbol=self.triangle.label,
+            exchange_buy=self.triangle.exchange,
+            exchange_sell=self.triangle.exchange,
+            net_alpha_bps=net_alpha_bps,
+            execution_probability=signal.execution_probability,
+            adverse_hazard=signal.adverse_hazard,
+            approved=approved,
+            reason=reason,
+        )
+
+        if not approved:
+            return
+
+        result = await self._mitigator.execute_triangle(
+            triangle=self.triangle,
+            quote_notional_usd=notional,
+            bridge_quote_price=vwap_bridge_quote,
+            target_bridge_price=vwap_target_bridge,
+            target_quote_price=vwap_target_quote,
+            bridge_qty=alpha.bridge_qty,
+            target_qty=alpha.target_qty,
+            gross_spread_pct=alpha.net_alpha,
+            net_spread_pct=alpha.net_alpha,
+            ml_confidence_score=signal.execution_probability,
+        )
+
+        record.execution_status = result.status.value
+        record.realized_pnl_usd = result.realized_pnl_usd
+        self._daily_notional_used_usd += result.executed_volume_usd
+
+        async with AsyncSessionLocal() as session:
+            await record_execution(session, result, self._user_id)
+
+
 async def run_forever(config: RunnerConfig | None = None) -> None:
     """Entry point: bootstraps the local user and runs every configured pair.
 
@@ -236,20 +395,29 @@ async def run_forever(config: RunnerConfig | None = None) -> None:
     if not config.enabled:
         logger.info("Runner disabled via RUNNER_ENABLED=false; not starting.")
         return
-    if not config.monitored_pairs:
-        logger.warning("No MONITORED_PAIRS configured; runner has nothing to do.")
+    if not config.monitored_pairs and not config.monitored_triangles:
+        logger.warning("No MONITORED_PAIRS or MONITORED_TRIANGLES configured; runner has nothing to do.")
         return
 
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user_by_email(session, config.local_user_email)
 
     STATE.local_user_id = user.id
-    STATE.monitored_pairs = [pair.symbol for pair in config.monitored_pairs]
+    STATE.monitored_pairs = [pair.symbol for pair in config.monitored_pairs] + [
+        triangle.label for triangle in config.monitored_triangles
+    ]
 
     cache = OrderBookCache.from_url(config.redis_url)
-    monitors = [PairMonitor(pair, cache, config, user.id) for pair in config.monitored_pairs]
+    pair_monitors = [PairMonitor(pair, cache, config, user.id) for pair in config.monitored_pairs]
+    triangle_monitors = [
+        TriangleMonitor(triangle, cache, config, user.id) for triangle in config.monitored_triangles
+    ]
+    all_monitors = [*pair_monitors, *triangle_monitors]
+    all_labels = [pair.symbol for pair in config.monitored_pairs] + [
+        triangle.label for triangle in config.monitored_triangles
+    ]
 
-    results = await asyncio.gather(*(m.run() for m in monitors), return_exceptions=True)
-    for pair, result in zip(config.monitored_pairs, results):
+    results = await asyncio.gather(*(m.run() for m in all_monitors), return_exceptions=True)
+    for label, result in zip(all_labels, results):
         if isinstance(result, Exception):
-            STATE.record_error(f"{pair.symbol} monitor exited: {result!r}")
+            STATE.record_error(f"{label} monitor exited: {result!r}")

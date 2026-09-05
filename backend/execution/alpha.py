@@ -9,6 +9,8 @@ Where leg A is the buy side (ask) and leg B is the sell side (bid).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 
 def compute_net_alpha(
     vwap_bid_b: float,
@@ -47,3 +49,68 @@ def compute_net_alpha(
 
     gross = (vwap_bid_b * (1 - tau_b) - denom) / denom
     return gross - slippage_est - (transfer_cost / capital_usd)
+
+
+@dataclass(frozen=True)
+class TriangularAlpha:
+    """Result of compute_triangular_net_alpha: the net alpha plus the exact
+    intermediate quantities its VWAP walk already computed, so a caller that
+    goes on to dispatch the trade doesn't have to re-derive bridge_qty/
+    target_qty (and re-walk the same book) a second time."""
+
+    net_alpha: float
+    bridge_qty: float
+    target_qty: float
+
+
+def compute_triangular_net_alpha(
+    quote_notional: float,
+    vwap_bridge_quote: float,
+    vwap_target_bridge: float,
+    vwap_target_quote: float,
+    tau: float,
+) -> TriangularAlpha:
+    """Net alpha for a single-exchange triangular cycle: quote -> bridge ->
+    target -> quote (e.g. USDT -> BTC -> ETH -> USDT), all three legs on the
+    same exchange — no cross-exchange transfer or hedging-across-venues risk,
+    unlike compute_net_alpha's two-exchange case.
+
+    Callers should compute each VWAP the same way compute_net_alpha's
+    callers already do: estimate the quantity from the best price, then
+    compute_vwap() for that quantity (see backend.marketdata.runner and
+    backend.marketdata.runner.TriangleMonitor). This function only does the
+    arithmetic on already-derived VWAPs — it doesn't walk order books
+    itself, so there's exactly one VWAP walk per leg, not a redundant one
+    for the risk-gate check and another for dispatch.
+
+    Args:
+        quote_notional: Capital deployed, in quote-currency units (e.g. USD/
+            USDT). Must be > 0.
+        vwap_bridge_quote: VWAP to buy the bridge asset spending
+            quote_notional worth of the quote currency (e.g. BTC/USDT ask VWAP).
+        vwap_target_bridge: VWAP to buy the target asset with the resulting
+            bridge amount (e.g. ETH/BTC ask VWAP).
+        vwap_target_quote: VWAP to sell the resulting target amount back
+            into the quote currency (e.g. ETH/USDT bid VWAP).
+        tau: Taker fee rate, applied once per leg (three times total) —
+            see backend.config.get_taker_fee_bps for per-exchange defaults.
+
+    Returns:
+        A TriangularAlpha with net_alpha as a fraction (e.g. 0.0015 == 15
+        bps; multiply by 1e4 for bps) plus the bridge/target quantities the
+        walk produced.
+
+    Raises:
+        ValueError: if quote_notional or any VWAP is not strictly positive.
+    """
+    if quote_notional <= 0:
+        raise ValueError("quote_notional must be strictly positive")
+    if vwap_bridge_quote <= 0 or vwap_target_bridge <= 0 or vwap_target_quote <= 0:
+        raise ValueError("all three VWAPs must be strictly positive")
+
+    bridge_qty = (quote_notional / vwap_bridge_quote) * (1 - tau)
+    target_qty = (bridge_qty / vwap_target_bridge) * (1 - tau)
+    quote_received = (target_qty * vwap_target_quote) * (1 - tau)
+
+    net_alpha = (quote_received - quote_notional) / quote_notional
+    return TriangularAlpha(net_alpha=net_alpha, bridge_qty=bridge_qty, target_qty=target_qty)

@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from backend.execution.triangular import TriangleConfig
+
 
 @dataclass(frozen=True)
 class PairConfig:
@@ -35,9 +37,30 @@ def _parse_monitored_pairs(raw: str) -> list[PairConfig]:
     return pairs
 
 
+def _parse_monitored_triangles(raw: str) -> list[TriangleConfig]:
+    """Parses MONITORED_TRIANGLES="USDT:BTC:ETH:binance,USDT:BTC:SOL:binance" —
+    each entry is QUOTE:BRIDGE:TARGET:exchange, describing the cycle
+    QUOTE -> BRIDGE -> TARGET -> QUOTE on that one exchange (see
+    backend.execution.triangular.TriangleConfig)."""
+    triangles: list[TriangleConfig] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts = chunk.split(":")
+        if len(parts) != 4:
+            raise ValueError(
+                f"invalid MONITORED_TRIANGLES entry {chunk!r}; expected QUOTE:BRIDGE:TARGET:exchange"
+            )
+        quote, bridge, target, exchange = parts
+        triangles.append(TriangleConfig(exchange=exchange, quote=quote, bridge=bridge, target=target))
+    return triangles
+
+
 @dataclass(frozen=True)
 class RunnerConfig:
     monitored_pairs: list[PairConfig]
+    monitored_triangles: list[TriangleConfig]
     notional_per_trade_usd: float
     default_taker_fee_bps: float
     poll_interval_s: float
@@ -78,8 +101,10 @@ def get_taker_fee_bps(exchange_id: str, default_fee_bps: float) -> float:
 
 def load_runner_config() -> RunnerConfig:
     raw_pairs = os.environ.get("MONITORED_PAIRS", "")
+    raw_triangles = os.environ.get("MONITORED_TRIANGLES", "")
     return RunnerConfig(
         monitored_pairs=_parse_monitored_pairs(raw_pairs),
+        monitored_triangles=_parse_monitored_triangles(raw_triangles),
         notional_per_trade_usd=float(os.environ.get("NOTIONAL_PER_TRADE_USD", "50.0")),
         default_taker_fee_bps=float(os.environ.get("DEFAULT_TAKER_FEE_BPS", "10.0")),
         poll_interval_s=float(os.environ.get("POLL_INTERVAL_S", "2.0")),
