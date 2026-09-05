@@ -28,8 +28,8 @@ from __future__ import annotations
 import abc
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Optional
 
 from backend.schemas import OrderBookLevel, OrderBookSnapshot
 
@@ -86,8 +86,8 @@ class MarketDataFeed(abc.ABC):
 
     async def run(
         self,
-        queue: Optional["asyncio.Queue[OrderBookSnapshot]"] = None,
-        callback: Optional[SnapshotCallback] = None,
+        queue: asyncio.Queue[OrderBookSnapshot] | None = None,
+        callback: SnapshotCallback | None = None,
     ) -> None:
         """Continuously fetch snapshots until stopped, publishing each one.
 
@@ -105,6 +105,53 @@ class MarketDataFeed(abc.ABC):
             await self.close()
 
 
+# Real exchange client instances, shared across every feed for the same
+# exchange (keyed by exchange_id). This matters for two reasons:
+#
+#   1. Correctness under many monitored pairs: each ccxt/ccxt.pro exchange
+#      instance calls load_markets() (a REST call) once, lazily, the first
+#      time it's used, and caches the result on itself. With a fresh
+#      instance per (exchange, symbol) pair, N pairs sharing an exchange
+#      (e.g. 8 pairs all touching Kraken) fire N concurrent load_markets()
+#      REST calls at startup — this reliably timed out
+#      ("RequestTimeout: kraken GET https://api.kraken.com/0/public/Assets")
+#      once MONITORED_PAIRS grew past a handful of pairs. Sharing one
+#      instance per exchange means load_markets() happens once, however
+#      many symbols/pairs use that exchange.
+#   2. It's also the intended ccxt.pro usage pattern: one exchange instance
+#      multiplexes concurrent watch_*() calls for many symbols over a
+#      shared connection, rather than opening a separate connection per
+#      symbol.
+#
+# Instances are never closed individually (see each feed's close()) since
+# multiple PairMonitors may share one — the process exiting is what tears
+# the connections down, which is fine for this local, single-run tool.
+_pro_exchange_cache: dict[str, object] = {}
+_rest_exchange_cache: dict[str, object] = {}
+
+
+def _get_pro_exchange(exchange_id: str):
+    if exchange_id not in _pro_exchange_cache:
+        import ccxt.pro as ccxtpro  # type: ignore[import-not-found]
+
+        exchange_cls = getattr(ccxtpro, exchange_id, None)
+        if exchange_cls is None:
+            raise ValueError(f"ccxt.pro has no exchange named {exchange_id!r}")
+        _pro_exchange_cache[exchange_id] = exchange_cls()
+    return _pro_exchange_cache[exchange_id]
+
+
+def _get_rest_exchange(exchange_id: str):
+    if exchange_id not in _rest_exchange_cache:
+        import ccxt.async_support as ccxt_async  # plain ccxt's asyncio REST client
+
+        exchange_cls = getattr(ccxt_async, exchange_id, None)
+        if exchange_cls is None:
+            raise ValueError(f"ccxt has no exchange named {exchange_id!r}")
+        _rest_exchange_cache[exchange_id] = exchange_cls()
+    return _rest_exchange_cache[exchange_id]
+
+
 class CcxtProFeed(MarketDataFeed):
     """Production adapter: streams L2 order books via ccxt.pro websockets."""
 
@@ -120,17 +167,12 @@ class CcxtProFeed(MarketDataFeed):
         # limit explicitly rather than relying on this default.
         super().__init__(exchange_id, symbol)
         try:
-            import ccxt.pro as ccxtpro  # type: ignore[import-not-found]
+            self._exchange = _get_pro_exchange(exchange_id)
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(
                 "ccxt.pro is not installed. Use CcxtRestPollingFeed as a "
                 "fallback, or install the ccxt.pro package."
             ) from exc
-
-        exchange_cls = getattr(ccxtpro, exchange_id, None)
-        if exchange_cls is None:
-            raise ValueError(f"ccxt.pro has no exchange named {exchange_id!r}")
-        self._exchange = exchange_cls()
         self._limit = limit
 
     async def _fetch_one(self) -> OrderBookSnapshot:
@@ -138,9 +180,10 @@ class CcxtProFeed(MarketDataFeed):
         return _raw_book_to_snapshot(self.exchange_id, self.symbol, raw_book)
 
     async def close(self) -> None:
-        close = getattr(self._exchange, "close", None)
-        if close is not None:
-            await close()
+        # No-op: self._exchange is shared with every other feed for this
+        # exchange_id (see _get_pro_exchange) — closing it here would break
+        # them. The process exiting closes the underlying connections.
+        pass
 
 
 class CcxtRestPollingFeed(MarketDataFeed):
@@ -152,12 +195,7 @@ class CcxtRestPollingFeed(MarketDataFeed):
 
     def __init__(self, exchange_id: str, symbol: str, limit: int = 50, poll_interval_s: float = 1.0) -> None:
         super().__init__(exchange_id, symbol)
-        import ccxt.async_support as ccxt_async  # plain ccxt's asyncio REST client
-
-        exchange_cls = getattr(ccxt_async, exchange_id, None)
-        if exchange_cls is None:
-            raise ValueError(f"ccxt has no exchange named {exchange_id!r}")
-        self._exchange = exchange_cls()
+        self._exchange = _get_rest_exchange(exchange_id)
         self._limit = limit
         self._poll_interval_s = poll_interval_s
 
@@ -167,7 +205,8 @@ class CcxtRestPollingFeed(MarketDataFeed):
         return _raw_book_to_snapshot(self.exchange_id, self.symbol, raw_book)
 
     async def close(self) -> None:
-        await self._exchange.close()
+        # No-op — see CcxtProFeed.close(); self._exchange is shared too.
+        pass
 
 
 # Order-book depth ("limit") accepted by each exchange's watchOrderBook
